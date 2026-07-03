@@ -1,0 +1,26 @@
+# --- Secrets: never commit ---
+.env
+service_account.json
+*.pem
+*.key
+
+# --- Purchased Vue rules (rulekit.dev) — license forbids redistribution ---
+frontend/CLAUDE.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# --- Generated artifacts ---
+tracker/*.xlsx
+.~lock.*#
+
+# --- OS / editors ---
+.DS_Store
+Untitled-*
+.idea/
+.vscode/

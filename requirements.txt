@@ -1,0 +1,7 @@
+python-telegram-bot==21.6
+anthropic>=0.40
+gspread>=6.1
+google-auth>=2.30
+openpyxl>=3.1
+# Optional (voice): faster-whisper>=1.0
+# Dev: pytest>=8.0
