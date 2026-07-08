@@ -42,10 +42,9 @@ def is_no(text):
 _INCOME_KW = (
     "salary", "paycheck", "wage", "bonus", "premium", "freelance", "fee",
     "dividend", "cashback", "refund", "income", "deposit", "payout",
-    "advance", "gift", "reimbursement",
+    "advance", "reimbursement",
     "зарплата", "аванс", "премия", "кэшбэк", "кешбэк", "возврат", "доход",
-    "депозит", "выплата", "подарок", "компенсация", "гонорар", "фриланс",
-    "пополнение")
+    "депозит", "выплата", "компенсация", "гонорар", "фриланс")
 
 
 def is_income(text: str) -> bool:

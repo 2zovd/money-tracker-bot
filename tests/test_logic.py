@@ -65,6 +65,11 @@ def test_is_income():
     assert dialog.is_income("возврат за отель 80")
     assert not dialog.is_income("продукты магазин 19.21")
     assert not dialog.is_income("65 топливо")
+    assert not dialog.is_income("подарок девушке 20")
+    assert not dialog.is_income("в копилку на подарок 20")
+    assert not dialog.is_income("gift to girlfriend")
+    assert not dialog.is_income("отложено 800")
+    assert not dialog.is_income("пополнение банкролла 50")
 
 
 def test_format_income():

@@ -44,6 +44,11 @@ Rules:
 - Refuelling -> "{fuel}"; put liters/price-per-liter in their fields, brand/station in place/note.
 - Gym/training classes -> "Функц. тренировки"; padel -> "Падел"; medicine, doctor,
   pharmacy -> "Аптека/медицина". Don't lump training into the pharmacy category.
+- Gifts/flowers/spending for the girlfriend (подарок девушке, цветы девушке, копилка
+  на подарок девушке) -> "Девушка". Money set aside into a general savings/emergency
+  buffer (отложено, подушка безопасности, копилка — with NO girlfriend/betting
+  context) -> "Подушка безопасности". "Пополнение банкролла" is ONLY for topping up
+  the Betfair/betting bot bankroll specifically — never a generic "set aside" phrase.
 - amount is a number only. For $/£ convert to {code} (USD*{usd}, GBP*{gbp}) and note it.
 - Amount unclear -> amount: null.
 Return ONLY the JSON array."""
