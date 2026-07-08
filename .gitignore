@@ -4,6 +4,9 @@ service_account.json
 *.pem
 *.key
 
+# --- Personal/private: not shipped in the repo (see bot/categories.example.py) ---
+bot/categories.py
+
 # --- Purchased Vue rules (rulekit.dev) — license forbids redistribution ---
 frontend/CLAUDE.md
 

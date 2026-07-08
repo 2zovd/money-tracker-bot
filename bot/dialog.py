@@ -42,7 +42,10 @@ def is_no(text):
 _INCOME_KW = (
     "salary", "paycheck", "wage", "bonus", "premium", "freelance", "fee",
     "dividend", "cashback", "refund", "income", "deposit", "payout",
-    "advance", "gift", "reimbursement")
+    "advance", "gift", "reimbursement",
+    "зарплата", "аванс", "премия", "кэшбэк", "кешбэк", "возврат", "доход",
+    "депозит", "выплата", "подарок", "компенсация", "гонорар", "фриланс",
+    "пополнение")
 
 
 def is_income(text: str) -> bool:
@@ -214,7 +217,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "I understand “yesterday / day before yesterday / today / DD.MM”. "
         "You can also send a receipt photo or a voice message.\n\n"
         "Income — prefix with “+”: “+4000 salary”, “+150 freelance refund”. Goes to a separate sheet.\n\n"
-        "/day /week /month — expense summaries   /income — income this month   /undo — delete the last expense")
+        "/day /week /month — expense summaries   /category <name> — monthly trend for one category\n"
+        "/months — income vs. expenses per month\n"
+        "/income — income this month   /undo — delete the last expense")
 
 
 def week_bounds(today: date):
@@ -262,6 +267,47 @@ async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     start, end = week_bounds(date.today())
     total, by_cat = await asyncio.to_thread(sheets.range_summary, start, end)
     await _send_summary(update, f"Week {start} — {end}", total, by_cat)
+
+
+async def cmd_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    if not ctx.args:
+        await update.message.reply_text(
+            "Usage: /category <name>\n\nCategories:\n" + "\n".join(f"  {c}" for c in CATEGORIES))
+        return
+    query = " ".join(ctx.args).lower()
+    match = next((c for c in CATEGORIES if c.lower() == query), None) \
+        or next((c for c in CATEGORIES if query in c.lower()), None)
+    if not match:
+        await update.message.reply_text(
+            "Unknown category. Categories:\n" + "\n".join(f"  {c}" for c in CATEGORIES))
+        return
+    history = await asyncio.to_thread(sheets.category_history, match)
+    if not history:
+        await update.message.reply_text(f"{match}: no expenses yet.")
+        return
+    lines = [f"{match} — last {len(history)} month(s):"]
+    for ym, amt in history:
+        lines.append(f"  {ym}  {amt:8.2f} {SYM}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_months(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    history = await asyncio.to_thread(sheets.months_summary)
+    if not history:
+        await update.message.reply_text("No income or expenses recorded yet.")
+        return
+    lines = [f"Income vs. expenses — last {len(history)} month(s):"]
+    for ym, inc, exp in history:
+        surplus = inc - exp
+        sign = "+" if surplus >= 0 else "-"
+        lines.append(
+            f"  {ym}   in {inc:8.2f} {SYM}   out {exp:8.2f} {SYM}   "
+            f"{sign}{abs(surplus):.2f} {SYM}")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_income(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

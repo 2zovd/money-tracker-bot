@@ -42,6 +42,8 @@ Rules:
 - Food/drinks out: "Coffee/snacks" (coffee/snack) or "Dining out" (a full meal);
   delivery -> "Delivery".
 - Refuelling -> "{fuel}"; put liters/price-per-liter in their fields, brand/station in place/note.
+- Gym/training classes -> "Функц. тренировки"; padel -> "Падел"; medicine, doctor,
+  pharmacy -> "Аптека/медицина". Don't lump training into the pharmacy category.
 - amount is a number only. For $/£ convert to {code} (USD*{usd}, GBP*{gbp}) and note it.
 - Amount unclear -> amount: null.
 Return ONLY the JSON array."""

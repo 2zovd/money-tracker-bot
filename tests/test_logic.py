@@ -3,26 +3,26 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from bot import dialog
-from bot.categories import FALLBACK
+from bot.categories import FALLBACK, FUEL, GROCERIES
 
 
 def test_place_asked_for_groceries():
-    e = dialog.normalize({"amount": 23.5, "category": "Groceries", "place": ""})
+    e = dialog.normalize({"amount": 23.5, "category": GROCERIES, "place": ""})
     assert dialog.next_missing(e) == "place"
 
 
 def test_no_ask_when_place_present():
-    e = dialog.normalize({"amount": 23.5, "category": "Groceries", "place": "Store A"})
+    e = dialog.normalize({"amount": 23.5, "category": GROCERIES, "place": "Store A"})
     assert dialog.next_missing(e) is None
 
 
 def test_fuel_asked_when_no_liters():
-    e = dialog.normalize({"amount": 65, "category": "Fuel"})
+    e = dialog.normalize({"amount": 65, "category": FUEL})
     assert dialog.next_missing(e) == "fuel"
 
 
 def test_fuel_liters_from_price():
-    e = dialog.normalize({"amount": 66.0, "category": "Fuel", "price_per_liter": 1.65})
+    e = dialog.normalize({"amount": 66.0, "category": FUEL, "price_per_liter": 1.65})
     assert e["liters"] == 40.0
     assert dialog.next_missing(e) is None
 
@@ -59,6 +59,12 @@ def test_is_income():
     assert dialog.is_income("+150 freelance")
     assert not dialog.is_income("groceries store 19.21")
     assert not dialog.is_income("65 fuel")
+    assert dialog.is_income("зарплата 5000 евро")
+    assert dialog.is_income("+3000 аванс")
+    assert dialog.is_income("кэшбэк 120")
+    assert dialog.is_income("возврат за отель 80")
+    assert not dialog.is_income("продукты магазин 19.21")
+    assert not dialog.is_income("65 топливо")
 
 
 def test_format_income():

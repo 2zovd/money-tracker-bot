@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/money-tracker-bot
-EnvironmentFile=/opt/money-tracker-bot/.env
-ExecStart=/opt/money-tracker-bot/venv/bin/python -m bot.main
+WorkingDirectory=/opt/expense-bot
+EnvironmentFile=/opt/expense-bot/.env
+ExecStart=/opt/expense-bot/venv/bin/python -m bot.main
 Restart=always
 RestartSec=5
 

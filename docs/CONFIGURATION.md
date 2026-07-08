@@ -5,7 +5,9 @@ Everything personal lives in two places: `bot/categories.py` (your budget) and `
 
 ## Categories, groups and plan amounts
 
-`bot/categories.py` is the single source of truth. Edit `CATEGORY_TABLE`:
+`bot/categories.py` is the single source of truth — and it's gitignored, so your personal
+categories never land in the repo. First time: `cp bot/categories.example.py bot/categories.py`.
+Edit `CATEGORY_TABLE`:
 
 ```python
 # (name, group, essential, plan, currency, note)

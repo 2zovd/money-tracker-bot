@@ -1,7 +1,7 @@
 """Entry point: build the app and start polling. Run: python -m bot.main"""
 import logging
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 
 from . import config, dialog
@@ -9,14 +9,29 @@ from . import config, dialog
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
 
+async def _post_init(app):
+    await app.bot.set_my_commands([
+        BotCommand("day", "Today's (or a date's) expenses"),
+        BotCommand("week", "This week's expenses"),
+        BotCommand("month", "This month's expenses"),
+        BotCommand("category", "Monthly trend for one category"),
+        BotCommand("months", "Income vs. expenses per month"),
+        BotCommand("income", "Income this month"),
+        BotCommand("undo", "Delete the last entry"),
+        BotCommand("help", "How to use the bot"),
+    ])
+
+
 def main():
     config.validate()
-    app = ApplicationBuilder().token(config.TELEGRAM_TOKEN).build()
+    app = ApplicationBuilder().token(config.TELEGRAM_TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", dialog.cmd_start))
     app.add_handler(CommandHandler("help", dialog.cmd_start))
     app.add_handler(CommandHandler("day", dialog.cmd_day))
     app.add_handler(CommandHandler("week", dialog.cmd_week))
     app.add_handler(CommandHandler("month", dialog.cmd_month))
+    app.add_handler(CommandHandler("category", dialog.cmd_category))
+    app.add_handler(CommandHandler("months", dialog.cmd_months))
     app.add_handler(CommandHandler("income", dialog.cmd_income))
     app.add_handler(CommandHandler("undo", dialog.cmd_undo))
     app.add_handler(MessageHandler(filters.PHOTO, dialog.on_photo))

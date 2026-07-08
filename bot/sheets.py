@@ -105,6 +105,39 @@ def month_summary():
     return ym, total, by_cat
 
 
+def category_history(category: str, months: int = 6):
+    """[(YYYY-MM, total), ...] for one category, oldest first, last `months` months with data."""
+    by_month = {}
+    for d, cat, amt in _expense_rows():
+        if cat.lower() == category.lower():
+            ym = d[:7]
+            by_month[ym] = by_month.get(ym, 0.0) + amt
+    return sorted(by_month.items())[-months:]
+
+
+def months_summary(months: int = 6):
+    """[(YYYY-MM, income_total, expense_total), ...] for the last `months` months
+    with any activity, oldest first."""
+    by_month = {}  # ym -> [income, expense]
+
+    for d, _cat, amt in _expense_rows():
+        ym = d[:7]
+        by_month.setdefault(ym, [0.0, 0.0])[1] += amt
+
+    for r in _income_ws().get_all_values()[1:]:  # row 1 is the header
+        if len(r) < 2 or not r[0]:
+            continue
+        try:
+            amt = _amount(r[1])
+        except ValueError:
+            continue
+        ym = str(r[0])[:7]
+        by_month.setdefault(ym, [0.0, 0.0])[0] += amt
+
+    items = sorted((ym, inc, exp) for ym, (inc, exp) in by_month.items())
+    return items[-months:]
+
+
 def undo_last():
     ws = _ws()
     row = _first_empty_row(ws) - 1

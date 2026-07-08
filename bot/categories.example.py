@@ -1,11 +1,15 @@
-"""Single source of truth for the budget.
+"""Single source of truth for the budget — EXAMPLE / starting template.
 
-Edit CATEGORY_TABLE to make the tracker your own: it drives BOTH the bot (parsing,
-validation, follow-up questions) and the generated spreadsheet (tracker/build_tracker.py).
-Keep the three sentinels (FUEL, GROCERIES, FALLBACK) pointing at real category names.
+Copy this file to bot/categories.py and edit CATEGORY_TABLE to make the tracker your
+own: it drives BOTH the bot (parsing, validation, follow-up questions) and the
+generated spreadsheet (tracker/build_tracker.py). Keep the three sentinels (FUEL,
+GROCERIES, FALLBACK) pointing at real category names.
+
+bot/categories.py is gitignored on purpose — your personal categories (and anything
+you'd rather not have in a public repo) live only in your local/deployed copy.
 
 Each row: (name, group, essential, plan, currency, note)
-  name      shown to the user and written to the sheet
+  name      shown to the user and written to the sheet — any language you like
   group     rollup bucket for the dashboard
   essential True if it counts toward the emergency-fund target (rent, food, bills...)
   plan      monthly planned amount in `currency`
