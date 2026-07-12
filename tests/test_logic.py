@@ -2,7 +2,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from bot import dialog
+from bot import dialog, debts
 from bot.categories import FALLBACK, FUEL, GROCERIES
 
 
@@ -98,6 +98,115 @@ def test_format_batch():
     out = dialog.format_batch(items)
     assert "1)" in out and "2)" in out
     assert "35.59" in out and "2 expense(s)" in out
+
+
+def test_parse_debt_command_lend():
+    p = debts.parse_debt_command(["дал", "Лёша", "10", "за", "кофе"])
+    assert p == {"action": "lend", "person": "Лёша", "amount": 10.0, "note": "за кофе"}
+
+
+def test_parse_debt_command_borrow_no_note():
+    p = debts.parse_debt_command(["занял", "X", "100"])
+    assert p == {"action": "borrow", "person": "X", "amount": 100.0, "note": ""}
+
+
+def test_parse_debt_command_repay():
+    p = debts.parse_debt_command(["вернул", "X", "50"])
+    assert p["action"] == "repay_borrowed" and p["amount"] == 50.0
+    p = debts.parse_debt_command(["вернули", "Лёша", "10", "кофе"])
+    assert p["action"] == "repay_lent" and p["note"] == "кофе"
+
+
+def test_parse_debt_command_errors():
+    import pytest
+    with pytest.raises(ValueError):
+        debts.parse_debt_command([])
+    with pytest.raises(ValueError):
+        debts.parse_debt_command(["blah", "X", "10"])
+    with pytest.raises(ValueError):
+        debts.parse_debt_command(["дал", "X"])  # no amount
+    with pytest.raises(ValueError):
+        debts.parse_debt_command(["дал", "X", "not a number"])
+
+
+def test_direction_mapping():
+    assert debts.direction_for_create("lend") == "lent"
+    assert debts.direction_for_create("borrow") == "borrowed"
+    assert debts.direction_for_repay("repay_borrowed") == "borrowed"
+    assert debts.direction_for_repay("repay_lent") == "lent"
+
+
+def test_format_open_list_empty():
+    assert debts.format_open_list([]) == "No open debts."
+
+
+def test_format_open_list_totals():
+    items = [
+        {"direction": "lent", "person": "Лёша", "remaining": 10.0},
+        {"direction": "lent", "person": "Лёша", "remaining": 5.0},
+        {"direction": "borrowed", "person": "X", "remaining": 100.0},
+    ]
+    out = debts.format_open_list(items)
+    assert "Owed to you:" in out and "You owe:" in out
+    assert "15.00" in out  # Лёша's combined remaining
+    assert "Net: -85.00" in out
+
+
+def test_parse_choice_number():
+    assert debts.parse_choice_number("2", 3) == 1
+    assert debts.parse_choice_number("0", 3) is None
+    assert debts.parse_choice_number("4", 3) is None
+    assert debts.parse_choice_number("abc", 3) is None
+
+
+def test_format_repay_result_closes_debt():
+    debt = {"remaining": 0.0}
+    msg = debts.format_repay_result(debt, 10.0)
+    assert "Debt closed." in msg
+
+
+def test_format_repay_result_still_open():
+    debt = {"remaining": 5.0}
+    msg = debts.format_repay_result(debt, 5.0)
+    assert "Debt closed." not in msg
+    assert "5.00" in msg
+
+
+def test_action_synonyms():
+    assert debts.parse_debt_command(["взял", "X", "10"])["action"] == "borrow"
+    assert debts.parse_debt_command(["отдал", "X", "10"])["action"] == "repay_borrowed"
+    assert debts.parse_debt_command(["погасил", "X", "10"])["action"] == "repay_borrowed"
+    assert debts.parse_debt_command(["одолжил", "X", "10"])["action"] == "lend"
+
+
+def test_format_closed_list_empty():
+    assert debts.format_closed_list([]) == "No closed debts yet."
+
+
+def test_format_closed_list():
+    closed = [
+        {"person": "Лёша", "direction": "lent", "amount": 10.0, "note": "кофе", "date": "2026-07-01"},
+        {"person": "X", "direction": "borrowed", "amount": 100.0, "note": "", "date": "2026-07-05"},
+    ]
+    out = debts.format_closed_list(closed)
+    assert "Лёша" in out and "X" in out
+    # newest first
+    assert out.index("X") < out.index("Лёша")
+
+
+def test_action_keyboard_has_four_actions_and_no_cancel():
+    kb = debts.action_keyboard()
+    buttons = [b for row in kb.inline_keyboard for b in row]
+    assert len(buttons) == 4
+    assert all(b.callback_data.startswith("debt:action:") for b in buttons)
+
+
+def test_person_keyboard_includes_cancel():
+    kb = debts.person_keyboard(["Лёша", "X"])
+    buttons = [b for row in kb.inline_keyboard for b in row]
+    assert len(buttons) == 3  # 2 persons + cancel
+    assert buttons[-1].callback_data == debts.CB_CANCEL
+    assert buttons[0].callback_data == debts.person_callback("Лёша")
 
 
 if __name__ == "__main__":

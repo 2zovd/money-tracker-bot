@@ -2,7 +2,7 @@
 import logging
 
 from telegram import BotCommand, Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from . import config, dialog
 
@@ -17,6 +17,8 @@ async def _post_init(app):
         BotCommand("category", "Monthly trend for one category"),
         BotCommand("months", "Income vs. expenses per month"),
         BotCommand("income", "Income this month"),
+        BotCommand("debt", "Lend, borrow, or repay a debt"),
+        BotCommand("debts", "Open debt balances, or one person's history"),
         BotCommand("undo", "Delete the last entry"),
         BotCommand("help", "How to use the bot"),
     ])
@@ -33,6 +35,9 @@ def main():
     app.add_handler(CommandHandler("category", dialog.cmd_category))
     app.add_handler(CommandHandler("months", dialog.cmd_months))
     app.add_handler(CommandHandler("income", dialog.cmd_income))
+    app.add_handler(CommandHandler("debt", dialog.cmd_debt))
+    app.add_handler(CommandHandler("debts", dialog.cmd_debts))
+    app.add_handler(CallbackQueryHandler(dialog.on_debt_callback, pattern="^debt:"))
     app.add_handler(CommandHandler("undo", dialog.cmd_undo))
     app.add_handler(MessageHandler(filters.PHOTO, dialog.on_photo))
     app.add_handler(MessageHandler(filters.VOICE, dialog.on_voice))

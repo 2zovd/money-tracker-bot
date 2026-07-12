@@ -59,10 +59,40 @@ them later without regenerating.
 ```
 WORKSHEET=Journal        # the expenses tab the bot writes to
 INCOME_WORKSHEET=Income log   # the income tab (created on first use)
+DEBTS_WORKSHEET=Debts             # debts tab (created on first use)
+REPAYMENTS_WORKSHEET=Debt repayments  # repayments tab (created on first use)
 ```
 
 `WORKSHEET` must match the expenses tab in your sheet (default `Journal`). If you rename
-tabs in `build_tracker.py`, keep them consistent across the formulas and `.env`.
+tabs in `build_tracker.py`, keep them consistent across the formulas and `.env`. Unlike
+`WORKSHEET`, the income/debts/repayments tabs are auto-created by the bot on first write if
+missing, so they don't need to exist beforehand.
+
+## Debts (`/debt`, `/debts`)
+
+```
+/debt                                 # guided menu: tap an action, then a person, type amount/note
+/debt дал <name> <amount> [note]      # you lent money — they owe you (also: одолжил, занёс)
+/debt занял <name> <amount> [note]    # you borrowed money — you owe them (also: взял)
+/debt вернул <name> <amount> [note]   # you repaid what you owed (also: отдал, погасил)
+/debt вернули <name> <amount> [note]  # they repaid what they owed you (also: отдали, погасили)
+/debts [name]                         # open balances, or one person's history
+/debts closed [name]                  # fully repaid debts
+```
+
+The command name is Latin (`/debt`) because Telegram only recognizes `/word` as a real
+slash-command for ASCII names — the action verb after it (and its synonyms, see `ACTIONS` in
+`bot/debts.py`) can be in any language.
+
+`/debt` with no arguments (or with just an action word, e.g. `/debt занял`) starts a guided
+flow: it shows an inline keyboard to pick lend/borrow/repay, then buttons for people who are
+relevant to that action (recent debtors for lend/borrow, people with a matching open debt for
+repay), then asks for the amount and note as plain text. You can always type a name instead of
+tapping a button. The one-line command (`/debt дал Лёша 10 кофе`) still works unchanged for
+quick entry. Closed (fully repaid) debts aren't deleted or moved — they stay in the `Debts`
+sheet and are just filtered out of the default `/debts` view; see `/debts closed`.
+
+See `docs/DATA_MODEL.md` for how debts and repayments are stored and linked.
 
 ## Who can use the bot (`.env`)
 

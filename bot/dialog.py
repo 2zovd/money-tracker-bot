@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from . import sheets, parser, config
+from . import sheets, parser, config, debts
 from .categories import CATEGORIES, FUEL, GROCERIES, FALLBACK
 
 log = logging.getLogger("expense-bot")
@@ -112,8 +112,9 @@ def format_batch(items) -> str:
 
 
 # ---- write/reply (single expense with follow-ups) ----
-async def _finalize(update, exp):
+async def _finalize(update, ctx, exp):
     await asyncio.to_thread(sheets.append_expense, exp)
+    ctx.user_data["last_write"] = {"kind": "expense"}
     await update.message.reply_text("Saved: " + _line(exp))
 
 
@@ -134,7 +135,7 @@ async def _step(update, ctx, exp):
         await update.message.reply_text("Where? store / market / other — or “-”.")
         return
     ctx.user_data.pop("pending", None)
-    await _finalize(update, exp)
+    await _finalize(update, ctx, exp)
 
 
 async def _answer_pending(update, ctx, text):
@@ -170,6 +171,7 @@ async def _answer_confirm(update, ctx, text):
     if is_yes(text):
         items = ctx.user_data.pop("confirm")
         n = await asyncio.to_thread(sheets.append_many, items)
+        ctx.user_data["last_write"] = {"kind": "expense"}
         await update.message.reply_text(f"Saved {n} expense(s).")
     elif is_no(text):
         ctx.user_data.pop("confirm", None)
@@ -200,6 +202,164 @@ async def _answer_confirm_income(update, ctx, text):
         await update.message.reply_text("Please answer “yes” or “no”.")
 
 
+# ---- debts: lend/borrow/repay via /debt, list/history via /debts ----
+async def _apply_repayment(update, ctx, debt, amount, note):
+    await asyncio.to_thread(sheets.append_repayment, None, debt["id"], amount, note)
+    updated = await asyncio.to_thread(sheets.debt_by_id, debt["id"])
+    ctx.user_data["last_write"] = {"kind": "repayment"}
+    await update.message.reply_text(debts.format_repay_result(updated, amount))
+
+
+async def _finalize_debt_action(update, ctx, action, person, amount, note):
+    if action in ("lend", "borrow"):
+        direction = debts.direction_for_create(action)
+        await asyncio.to_thread(
+            sheets.append_debt, None, person, direction, amount, config.CURRENCY_CODE, note)
+        ctx.user_data["last_write"] = {"kind": "debt"}
+        await update.message.reply_text(debts.format_debt_created(direction, person, amount, note))
+        return
+
+    direction = debts.direction_for_repay(action)
+    matches = await asyncio.to_thread(sheets.open_debts, person, direction)
+    if not matches:
+        await update.message.reply_text(f"No open debt found for {person}.")
+        return
+    if len(matches) == 1:
+        await _apply_repayment(update, ctx, matches[0], amount, note)
+        return
+    ctx.user_data["pending_repay"] = {
+        "debts": matches, "amount": amount, "note": note, "person": person}
+    await update.message.reply_text(debts.format_repay_choices(matches, person))
+
+
+async def _answer_pending_repay(update, ctx, text):
+    state = ctx.user_data["pending_repay"]
+    idx = debts.parse_choice_number(text, len(state["debts"]))
+    if idx is None:
+        await update.message.reply_text("Please reply with the debt number.")
+        return
+    ctx.user_data.pop("pending_repay")
+    await _apply_repayment(update, ctx, state["debts"][idx], state["amount"], state["note"])
+
+
+# ---- guided /debt menu: buttons for action -> person -> typed amount -> typed note ----
+async def _ask_person(reply, ctx, action):
+    ctx.user_data["debt_wizard"] = {"action": action, "step": "person"}
+    if action in ("lend", "borrow"):
+        persons = await asyncio.to_thread(sheets.recent_debt_persons)
+    else:
+        direction = debts.direction_for_repay(action)
+        persons = await asyncio.to_thread(sheets.persons_with_open_debt, direction)
+        if not persons:
+            ctx.user_data.pop("debt_wizard", None)
+            await reply("No open debts in that direction.")
+            return
+    await reply(debts.ACTION_PROMPTS[action], reply_markup=debts.person_keyboard(persons))
+
+
+async def _start_debt_wizard(update, ctx, action=None):
+    async def reply(text, reply_markup=None):
+        await update.message.reply_text(text, reply_markup=reply_markup)
+
+    if action is None:
+        open_all = await asyncio.to_thread(sheets.open_debts)
+        summary = debts.format_open_list(open_all)
+        await reply(summary + "\n\nWhat do you want to do?", debts.action_keyboard())
+        return
+    await _ask_person(reply, ctx, action)
+
+
+async def on_debt_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+    await query.answer()
+
+    async def reply(text, reply_markup=None):
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    data = query.data
+    if data == debts.CB_CANCEL:
+        ctx.user_data.pop("debt_wizard", None)
+        await reply("Cancelled.")
+        return
+    if data.startswith(f"{debts.CB_PREFIX}:action:"):
+        action = data.split(":", 2)[2]
+        await _ask_person(reply, ctx, action)
+        return
+    if data.startswith(f"{debts.CB_PREFIX}:person:"):
+        name = data.split(":", 2)[2]
+        wiz = ctx.user_data.get("debt_wizard")
+        if not wiz:
+            await reply("Session expired — start again with /debt.")
+            return
+        wiz["person"] = name
+        wiz["step"] = "amount"
+        await reply(f"{name} — how much?")
+        return
+
+
+async def _answer_debt_wizard(update, ctx, text):
+    wiz = ctx.user_data["debt_wizard"]
+    if text.strip().lower() in debts.CANCEL_WORDS:
+        ctx.user_data.pop("debt_wizard")
+        await update.message.reply_text("Cancelled.")
+        return
+    if wiz["step"] == "person":
+        wiz["person"] = text.strip()
+        wiz["step"] = "amount"
+        await update.message.reply_text("How much?")
+        return
+    if wiz["step"] == "amount":
+        amount = debts._num(text)
+        if amount is None:
+            await update.message.reply_text("Couldn't read the amount, try again.")
+            return
+        wiz["amount"] = amount
+        wiz["step"] = "note"
+        await update.message.reply_text("Note? (or “-” to skip)")
+        return
+    note = "" if _skip(text) else text.strip()
+    ctx.user_data.pop("debt_wizard")
+    await _finalize_debt_action(update, ctx, wiz["action"], wiz["person"], wiz["amount"], note)
+
+
+async def cmd_debt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    if not ctx.args:
+        await _start_debt_wizard(update, ctx)
+        return
+    if len(ctx.args) == 1 and ctx.args[0].lower() in debts.ACTIONS:
+        await _start_debt_wizard(update, ctx, action=debts.ACTIONS[ctx.args[0].lower()])
+        return
+    try:
+        parsed = debts.parse_debt_command(ctx.args)
+    except ValueError as e:
+        await update.message.reply_text(str(e))
+        return
+    await _finalize_debt_action(
+        update, ctx, parsed["action"], parsed["person"], parsed["amount"], parsed["note"])
+
+
+async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    if ctx.args and ctx.args[0].lower() == "closed":
+        person = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else None
+        closed = await asyncio.to_thread(sheets.closed_debts, person)
+        await update.message.reply_text(debts.format_closed_list(closed))
+        return
+    if ctx.args:
+        person = " ".join(ctx.args)
+        history = await asyncio.to_thread(sheets.debt_history, person)
+        await update.message.reply_text(debts.format_person_history(person, history))
+        return
+    open_all = await asyncio.to_thread(sheets.open_debts)
+    await update.message.reply_text(debts.format_open_list(open_all))
+
+
 # ---- handlers ----
 def _authorized(update):
     return not config.ALLOWED_USER_IDS or str(update.effective_user.id) in config.ALLOWED_USER_IDS
@@ -216,9 +376,17 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "I understand “yesterday / day before yesterday / today / DD.MM”. "
         "You can also send a receipt photo or a voice message.\n\n"
         "Income — prefix with “+”: “+4000 salary”, “+150 freelance refund”. Goes to a separate sheet.\n\n"
+        "Debts:\n"
+        "  /debt — guided menu (buttons): pick lend/borrow/repay, then who, amount, note\n"
+        "  /debt дал <name> <amount> [note] — you lent money (also: одолжил)\n"
+        "  /debt занял <name> <amount> [note] — you borrowed money (also: взял)\n"
+        "  /debt вернул <name> <amount> [note] — you repaid what you owed (also: отдал, погасил)\n"
+        "  /debt вернули <name> <amount> [note] — they repaid what they owed you\n"
+        "  /debts [name] — open balances, or one person's history\n"
+        "  /debts closed [name] — fully repaid debts\n\n"
         "/day /week /month — expense summaries   /category <name> — monthly trend for one category\n"
         "/months — income vs. expenses per month\n"
-        "/income — income this month   /undo — delete the last expense")
+        "/income — income this month   /undo — delete the last entry")
 
 
 def week_bounds(today: date):
@@ -322,13 +490,23 @@ async def cmd_income(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines))
 
 
+_UNDO_FUNCS = {
+    "expense": sheets.undo_last,
+    "debt": sheets.undo_last_debt,
+    "repayment": sheets.undo_last_repayment,
+}
+
+
 async def cmd_undo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
     ctx.user_data.pop("pending", None)
     ctx.user_data.pop("confirm", None)
     ctx.user_data.pop("confirm_income", None)
-    vals = await asyncio.to_thread(sheets.undo_last)
+    ctx.user_data.pop("pending_repay", None)
+    ctx.user_data.pop("debt_wizard", None)
+    kind = ctx.user_data.pop("last_write", {}).get("kind", "expense")
+    vals = await asyncio.to_thread(_UNDO_FUNCS[kind])
     if not vals:
         await update.message.reply_text("Nothing to delete.")
         return
@@ -347,6 +525,12 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         if "pending" in ctx.user_data:
             await _answer_pending(update, ctx, update.message.text)
+            return
+        if "pending_repay" in ctx.user_data:
+            await _answer_pending_repay(update, ctx, update.message.text)
+            return
+        if "debt_wizard" in ctx.user_data:
+            await _answer_debt_wizard(update, ctx, update.message.text)
             return
         if is_income(update.message.text):
             items = await asyncio.to_thread(parser.parse_income, update.message.text)
@@ -385,6 +569,12 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         if "pending" in ctx.user_data:
             await _answer_pending(update, ctx, text)
+            return
+        if "pending_repay" in ctx.user_data:
+            await _answer_pending_repay(update, ctx, text)
+            return
+        if "debt_wizard" in ctx.user_data:
+            await _answer_debt_wizard(update, ctx, text)
             return
         if is_income(text):
             items = await asyncio.to_thread(parser.parse_income, text)

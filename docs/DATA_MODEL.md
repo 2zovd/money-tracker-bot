@@ -23,8 +23,30 @@ One expense has several independent dimensions. Don't collapse them into a singl
    H Note · I Month (formula) · J Group (VLOOKUP) · K Essential (VLOOKUP)`.
   The bot writes A–F and H; G, I, J, K are template formulas.
 - **Expenses** — plan vs actual per category, rolled up into groups.
-- **Dashboard** — income, plan/actual, surplus, emergency fund, group rollup.
+- **Dashboard** — income, plan/actual, surplus, emergency fund, group rollup, debts.
 - **Income**, **Assets** — planned income and savings (buffer vs risk).
+- **Debts**, **Debt repayments** — see below.
+
+## Debts
+
+Debt is its own axis, separate from expenses/income — lending or borrowing money isn't a
+budget category, it's a claim between you and another person that gets settled later.
+
+- **Debts** — one row per debt (created once, via `/debt дал|занял`). Columns:
+  `A Date · B Person · C Direction (lent/borrowed) · D Amount · E Currency · F Note ·
+   G ID (formula, = ROW()) · H Repaid (formula, SUMIF over Debt repayments) ·
+   I Remaining (formula, D − H) · J Status (formula)`.
+  The bot writes A–F; G–J are template formulas for display. `lent` = you gave money, the
+  person owes you. `borrowed` = you took money, you owe the person.
+- **Debt repayments** — one row per repayment (via `/debt вернул|вернули`), append-only:
+  `A Date · B DebtID · C Amount · D Note`. `DebtID` is the row number of the debt in the
+  Debts sheet — a debt can have several repayments (partial or full), so it's tracked to
+  the exact debt even when a person has more than one open at once.
+- The bot computes repaid/remaining/open-vs-closed in Python (same pattern as `range_summary`,
+  `income_summary`, etc.) by scanning both sheets — the sheet-side G–J formulas are only for
+  a human reading the sheet directly, not something the bot relies on.
+- Dashboard shows "Owed to you" / "You owe" / "Net debt position", summed over open debts
+  (`Remaining > 0`) by direction.
 
 ## Category rule
 

@@ -44,6 +44,7 @@ N=len(CATS)
 LAST=3+N        # last category row
 TOTAL=4+N       # TOTAL row in "Expenses"
 ESS=TOTAL+2     # "Essential / mo" row
+DEBTS_LAST=303  # last template row on the Debts sheet (rows 4..303)
 
 # ============ DASHBOARD
 d=wb.active; d.title="Dashboard"; d.sheet_view.showGridLines=False
@@ -92,6 +93,20 @@ setc(d,f"A{r}","TOTAL actual",F(10,True),good_fill,bd=True)
 setc(d,f"B{r}",f"=SUM(B18:B{r-1})",F(10,True),good_fill,EUR,bd=True)
 setc(d,"D17","Yellow cells — edit them. Categories/groups live on the Reference sheet.",note_font)
 d.merge_cells("D17:E24"); d["D17"].alignment=Alignment(wrap_text=True,vertical="top")
+# debts (owed to me / I owe), from the Debts sheet — open debts only (Remaining > 0)
+r+=2
+setc(d,f"A{r}","DEBTS",sect_font,sect_fill); d.merge_cells(f"A{r}:B{r}")
+r+=1
+setc(d,f"A{r}","Owed to you")
+setc(d,f"B{r}",f'=SUMPRODUCT((Debts!$C$4:$C${DEBTS_LAST}="lent")*(Debts!$I$4:$I${DEBTS_LAST}>0)*Debts!$I$4:$I${DEBTS_LAST})',F(10,True),None,EUR,bd=True)
+owed_row=r
+r+=1
+setc(d,f"A{r}","You owe")
+setc(d,f"B{r}",f'=SUMPRODUCT((Debts!$C$4:$C${DEBTS_LAST}="borrowed")*(Debts!$I$4:$I${DEBTS_LAST}>0)*Debts!$I$4:$I${DEBTS_LAST})',F(10,True),None,EUR,bd=True)
+owe_row=r
+r+=1
+setc(d,f"A{r}","Net debt position",F(10,True),good_fill,bd=True)
+setc(d,f"B{r}",f"=B{owed_row}-B{owe_row}",F(10,True),good_fill,EUR,bd=True)
 
 # ============ REFERENCE
 sp=wb.create_sheet("Reference"); sp.sheet_view.showGridLines=False
@@ -195,6 +210,39 @@ setc(av,"A8","TOTAL assets",F(10,True),good_fill,bd=True)
 for col in ["B","C"]: setc(av,f"{col}8","",None,good_fill,bd=True)
 setc(av,"D8","=SUM(D4:D7)",F(10,True),good_fill,EUR,bd=True)
 for col in ["E","F"]: setc(av,f"{col}8","",None,good_fill,bd=True)
+
+# ============ DEBTS
+db=wb.create_sheet("Debts"); db.sheet_view.showGridLines=False
+widths={"A":12,"B":18,"C":11,"D":13,"E":10,"F":26,"G":6,"H":11,"I":11,"J":9}
+for col,w in widths.items(): db.column_dimensions[col].width=w
+db.merge_cells("A1:J1"); setc(db,"A1","DEBTS — add each debt via the bot (/debt дал / занял)",title_font,title_fill,align="left")
+setc(db,"A2",'Direction is "lent" (they owe you) or "borrowed" (you owe them). Repaid/Remaining/Status are computed from Debt repayments.',note_font); db.merge_cells("A2:J2")
+heads=["Date","Person","Direction","Amount","Currency","Note","ID","Repaid","Remaining","Status"]
+for i,h in enumerate(heads): setc(db,f"{chr(65+i)}3",h,hdr_font,hdr_fill,bd=True,align="center")
+def drow(r):
+    for col in ["A","B","C","D","E","F"]:
+        setc(db,f"{col}{r}","",F(10),bd=True)
+    db[f"D{r}"].number_format=EUR2; db[f"A{r}"].alignment=Alignment(horizontal="center")
+    # H/I stay numeric (0, not "") even on blank rows, so the Dashboard SUMPRODUCT below
+    # doesn't choke on text — only J (a text-only column) uses the "" blank-row guard.
+    setc(db,f"G{r}",f"=IF(A{r}=\"\",\"\",ROW())",note_font,None,None,bd=True,align="center")
+    setc(db,f"H{r}",f"=SUMIF('Debt repayments'!$B:$B,G{r},'Debt repayments'!$C:$C)",F(10),None,EUR2,bd=True)
+    setc(db,f"I{r}",f"=D{r}-H{r}",F(10),None,EUR2,bd=True)
+    setc(db,f"J{r}",f'=IF(A{r}="","",IF(I{r}<=0,"closed","open"))',note_font,None,None,bd=True,align="center")
+for r in range(4,DEBTS_LAST+1): drow(r)
+dv_dir=DataValidation(type="list",formula1='"lent,borrowed"',allow_blank=True)
+db.add_data_validation(dv_dir); dv_dir.add(f"C4:C{DEBTS_LAST}")
+
+# ============ DEBT REPAYMENTS
+rp=wb.create_sheet("Debt repayments"); rp.sheet_view.showGridLines=False
+widths={"A":12,"B":10,"C":13,"D":30}
+for col,w in widths.items(): rp.column_dimensions[col].width=w
+rp.merge_cells("A1:D1"); setc(rp,"A1","DEBT REPAYMENTS — added by the bot (/debt вернул / вернули)",title_font,title_fill,align="left")
+for i,h in enumerate(["Date","DebtID","Amount","Note"]): setc(rp,f"{chr(65+i)}3",h,hdr_font,hdr_fill,bd=True,align="center")
+for r in range(4,DEBTS_LAST+1):
+    for col in ["A","B","C","D"]:
+        setc(rp,f"{col}{r}","",F(10),bd=True)
+    rp[f"C{r}"].number_format=EUR2; rp[f"A{r}"].alignment=Alignment(horizontal="center")
 
 out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "budget-tracker.xlsx")
 wb.save(out)

@@ -7,6 +7,8 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 SHEET_ID = os.environ.get("SHEET_ID", "")
 WORKSHEET = os.environ.get("WORKSHEET", "Journal")
 INCOME_WORKSHEET = os.environ.get("INCOME_WORKSHEET", "Income log")
+DEBTS_WORKSHEET = os.environ.get("DEBTS_WORKSHEET", "Debts")
+REPAYMENTS_WORKSHEET = os.environ.get("REPAYMENTS_WORKSHEET", "Debt repayments")
 SA_FILE = os.environ.get("GOOGLE_SA_FILE", "service_account.json")
 
 # Currency: symbol shown to the user, code stored, and FX rates the parser uses to
