@@ -5,6 +5,17 @@ voice), parses them with the Claude API, and writes structured rows into a Googl
 The sheet holds a budget model (plan vs actual, emergency fund, group rollups). The project
 is white-label — categories, currency and language are meant to be customized.
 
+**This is a public GitHub repository** (used, among other things, as a portfolio/interview
+reference). Beyond the usual secrets hygiene, keep this in mind:
+- Never commit anything personal: real names, phone numbers, addresses, actual spending
+  data, real Sheet IDs, real ssh hosts/IPs — not even in examples or commit messages.
+- Code, comments and commit messages should read as normal, deliberate engineering — avoid
+  leftover TODO/FIXME clutter, dead code, or comments that narrate a prompt/task instead of
+  the code itself.
+- Don't add AI-attribution trailers (`Co-Authored-By: Claude` etc.) to commits — the user's
+  global git instructions already forbid this, it also applies here specifically because
+  the repo is public.
+
 ## Layout
 
 ```
@@ -13,8 +24,10 @@ money-tracker-bot/
 │   ├── main.py         # entry point: python -m bot.main
 │   ├── config.py       # environment variables (keys, currency, tab names, allowlist)
 │   ├── categories.py   # SINGLE SOURCE OF TRUTH: categories, groups, plan amounts
+│   ├── strings.py      # all user-facing bot text — edit this file to translate the bot
 │   ├── sheets.py       # Google Sheets layer
 │   ├── parser.py       # expense/income parsing via Claude (lazy client)
+│   ├── debts.py        # debt tracking: parsing/formatting/keyboards (no network)
 │   └── dialog.py       # Telegram handlers + follow-up question logic
 ├── tracker/        # spreadsheet generator (openpyxl) — reads bot/categories.py
 │   └── build_tracker.py
@@ -48,6 +61,10 @@ set -a; source .env; set +a; ./venv/bin/python -m bot.main
   follow-ups) and the tracker generator both read `CATEGORY_TABLE` from it. Change
   categories there and rebuild the tracker — never hardcode a category elsewhere.
 - Keep the `FUEL` / `GROCERIES` / `FALLBACK` sentinels pointing at real category names.
+- **All bot-facing text (messages, prompts, button labels, command descriptions) lives in
+  `bot/strings.py`.** Never hardcode a user-facing string in `dialog.py`/`debts.py`/
+  `main.py` — add it to `strings.py` and import it, so the whole UI stays translatable
+  from one file.
 - Secrets only in `.env` and `service_account.json` — both gitignored. Never hardcode or
   log keys.
 - Network calls (Claude, Sheets) are blocking; wrap them in `asyncio.to_thread` inside

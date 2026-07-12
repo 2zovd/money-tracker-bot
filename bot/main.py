@@ -4,24 +4,14 @@ import logging
 from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from . import config, dialog
+from . import config, dialog, strings
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
 
 async def _post_init(app):
-    await app.bot.set_my_commands([
-        BotCommand("day", "Today's (or a date's) expenses"),
-        BotCommand("week", "This week's expenses"),
-        BotCommand("month", "This month's expenses"),
-        BotCommand("category", "Monthly trend for one category"),
-        BotCommand("months", "Income vs. expenses per month"),
-        BotCommand("income", "Income this month"),
-        BotCommand("debt", "Lend, borrow, or repay a debt"),
-        BotCommand("debts", "Open debt balances, or one person's history"),
-        BotCommand("undo", "Delete the last entry"),
-        BotCommand("help", "How to use the bot"),
-    ])
+    await app.bot.set_my_commands(
+        [BotCommand(cmd, desc) for cmd, desc in strings.COMMAND_DESCRIPTIONS])
 
 
 def main():

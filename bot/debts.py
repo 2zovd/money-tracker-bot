@@ -7,7 +7,7 @@ import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from . import config
+from . import config, strings as s
 
 SYM = config.CURRENCY_SYMBOL
 
@@ -18,13 +18,6 @@ ACTIONS = {
     "занял": "borrow", "взял": "borrow",
     "вернул": "repay_borrowed", "отдал": "repay_borrowed", "погасил": "repay_borrowed",
     "вернули": "repay_lent", "отдали": "repay_lent", "погасили": "repay_lent",
-}
-
-ACTION_PROMPTS = {
-    "lend": "You lent money — who to?",
-    "borrow": "You borrowed money — from who?",
-    "repay_borrowed": "Repaying a debt — to who?",
-    "repay_lent": "Someone repaid you — who?",
 }
 
 CANCEL_WORDS = ("cancel", "отмена", "стоп", "stop")
@@ -41,14 +34,7 @@ def person_callback(name: str) -> str:
     return f"{CB_PREFIX}:person:{name}"
 
 
-USAGE = (
-    "Usage:\n"
-    "  /debt дал <name> <amount> [note] — you lent money, they owe you\n"
-    "  /debt занял <name> <amount> [note] — you borrowed money, you owe them\n"
-    "  /debt вернул <name> <amount> [note] — you repaid what you owed them\n"
-    "  /debt вернули <name> <amount> [note] — they repaid what they owed you\n\n"
-    "Or just /debt with no arguments for a guided menu."
-)
+USAGE = s.DEBT_USAGE
 
 
 def _num(text):
@@ -63,7 +49,7 @@ def parse_debt_command(args: list) -> dict:
         raise ValueError(USAGE)
     action = ACTIONS.get(args[0].lower())
     if not action:
-        raise ValueError(f"Unknown action “{args[0]}”.\n\n{USAGE}")
+        raise ValueError(s.UNKNOWN_ACTION.format(action=args[0], usage=USAGE))
     if len(args) < 3:
         raise ValueError(USAGE)
     person = args[1]
@@ -75,7 +61,7 @@ def parse_debt_command(args: list) -> dict:
             amount, amount_idx = n, i
             break
     if amount is None:
-        raise ValueError("Couldn't read the amount.\n\n" + USAGE)
+        raise ValueError(s.NO_AMOUNT_DEBT.format(usage=USAGE))
     note_tokens = rest[:amount_idx] + rest[amount_idx + 1:]
     return {"action": action, "person": person, "amount": amount,
             "note": " ".join(note_tokens).strip()}
@@ -99,15 +85,15 @@ def _line(d) -> str:
 
 
 def format_debt_created(direction: str, person: str, amount: float, note: str) -> str:
-    verb = "owes you" if direction == "lent" else "you owe"
+    verb = s.VERB_OWES_YOU if direction == "lent" else s.VERB_YOU_OWE
     tail = f" ({note})" if note else ""
-    return f"Saved: {person} {verb} {amount:.2f} {SYM}{tail}"
+    return s.DEBT_CREATED.format(person=person, verb=verb, amount=amount, sym=SYM, tail=tail)
 
 
 def format_open_list(debts: list) -> str:
     """/долги with no argument: everyone's open balances."""
     if not debts:
-        return "No open debts."
+        return s.NO_OPEN_DEBTS
     lent = [d for d in debts if d["direction"] == "lent"]
     borrowed = [d for d in debts if d["direction"] == "borrowed"]
 
@@ -119,31 +105,31 @@ def format_open_list(debts: list) -> str:
 
     lines = []
     if lent:
-        lines.append("Owed to you:")
+        lines.append(s.OWED_TO_YOU)
         lines += [f"  {amt:8.2f} {SYM}  {p}" for p, amt in by_person(lent)]
     if borrowed:
-        lines.append("You owe:")
+        lines.append(s.YOU_OWE)
         lines += [f"  {amt:8.2f} {SYM}  {p}" for p, amt in by_person(borrowed)]
     net = sum(d["remaining"] for d in lent) - sum(d["remaining"] for d in borrowed)
     sign = "+" if net >= 0 else "-"
-    lines.append(f"\nNet: {sign}{abs(net):.2f} {SYM}")
+    lines.append(s.NET_LINE.format(sign=sign, amount=abs(net), sym=SYM))
     return "\n".join(lines)
 
 
 def format_person_history(person: str, debts: list) -> str:
     """/долги <name>: this person's debts, open and closed, newest first."""
     if not debts:
-        return f"{person}: no debts recorded."
+        return s.NO_DEBTS_FOR_PERSON.format(person=person)
     lines = [f"{person}:"]
     for d in debts:
         tag = "open" if d["status"] == "open" else "closed"
-        verb = "owes you" if d["direction"] == "lent" else "you owe"
+        verb = s.VERB_OWES_YOU if d["direction"] == "lent" else s.VERB_YOU_OWE
         lines.append(f"  [{tag}] {verb} — {_line(d)} · {d['date']}")
     return "\n".join(lines)
 
 
 def format_repay_choices(debts: list, person: str) -> str:
-    lines = [f"{person} has {len(debts)} open debts — which one?"]
+    lines = [s.REPAY_CHOICES_HEADER.format(person=person, n=len(debts))]
     lines += [f"  {i}) {_line(d)}" for i, d in enumerate(debts, 1)]
     return "\n".join(lines)
 
@@ -158,21 +144,21 @@ def parse_choice_number(text: str, n: int):
 
 
 def format_repay_result(debt: dict, paid: float) -> str:
-    msg = f"Recorded {paid:.2f} {SYM} repayment. Remaining: {max(debt['remaining'], 0):.2f} {SYM}."
+    msg = s.REPAY_RESULT.format(paid=paid, remaining=max(debt["remaining"], 0), sym=SYM)
     if debt["remaining"] <= 0:
-        msg += " Debt closed."
+        msg += s.DEBT_CLOSED
         if debt["remaining"] < 0:
-            msg += f" (overpaid by {-debt['remaining']:.2f} {SYM})"
+            msg += s.OVERPAID.format(amount=-debt["remaining"], sym=SYM)
     return msg
 
 
 def format_closed_list(closed: list) -> str:
     """/debts closed: fully repaid debts, newest first."""
     if not closed:
-        return "No closed debts yet."
-    lines = ["Closed debts:"]
+        return s.NO_CLOSED_DEBTS
+    lines = [s.CLOSED_DEBTS_HEADER]
     for d in sorted(closed, key=lambda x: x["date"], reverse=True):
-        verb = "owed you" if d["direction"] == "lent" else "you owed"
+        verb = s.VERB_OWED_YOU if d["direction"] == "lent" else s.VERB_YOU_OWED
         tail = f" ({d['note']})" if d.get("note") else ""
         lines.append(f"  {d['person']} {verb} {d['amount']:.2f} {SYM}{tail} · {d['date']}")
     return "\n".join(lines)
@@ -181,10 +167,10 @@ def format_closed_list(closed: list) -> str:
 # ---- guided /debt menu: action buttons -> person buttons (or free text) -> amount -> note ----
 def action_keyboard() -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton("➕ Я дал в долг", callback_data=action_callback("lend")),
-         InlineKeyboardButton("➕ Я занял", callback_data=action_callback("borrow"))],
-        [InlineKeyboardButton("↩️ Я вернул", callback_data=action_callback("repay_borrowed")),
-         InlineKeyboardButton("↩️ Мне вернули", callback_data=action_callback("repay_lent"))],
+        [InlineKeyboardButton(s.BTN_LEND, callback_data=action_callback("lend")),
+         InlineKeyboardButton(s.BTN_BORROW, callback_data=action_callback("borrow"))],
+        [InlineKeyboardButton(s.BTN_REPAY_BORROWED, callback_data=action_callback("repay_borrowed")),
+         InlineKeyboardButton(s.BTN_REPAY_LENT, callback_data=action_callback("repay_lent"))],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -192,5 +178,5 @@ def action_keyboard() -> InlineKeyboardMarkup:
 def person_keyboard(persons: list) -> InlineKeyboardMarkup:
     """One button per known person (tap to pick), plus Cancel. Typing a name always works too."""
     rows = [[InlineKeyboardButton(p, callback_data=person_callback(p))] for p in persons]
-    rows.append([InlineKeyboardButton("✖ Cancel", callback_data=CB_CANCEL)])
+    rows.append([InlineKeyboardButton(s.BTN_CANCEL, callback_data=CB_CANCEL)])
     return InlineKeyboardMarkup(rows)

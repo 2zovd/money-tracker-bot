@@ -1,7 +1,8 @@
 """Dialog logic: parse expenses (single or batch), follow-up questions, confirm, write.
 
-Every message shown to the user is English. Data is written to the sheet using the
-category names from bot/categories.py so it stays in sync with the tracker."""
+All user-facing text lives in bot/strings.py — edit that file to translate the bot.
+Data is written to the sheet using the category names from bot/categories.py so it
+stays in sync with the tracker."""
 import re
 import asyncio
 import logging
@@ -10,7 +11,7 @@ from datetime import date, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from . import sheets, parser, config, debts
+from . import sheets, parser, config, debts, strings as s
 from .categories import CATEGORIES, FUEL, GROCERIES, FALLBACK
 
 log = logging.getLogger("expense-bot")
@@ -115,24 +116,24 @@ def format_batch(items) -> str:
 async def _finalize(update, ctx, exp):
     await asyncio.to_thread(sheets.append_expense, exp)
     ctx.user_data["last_write"] = {"kind": "expense"}
-    await update.message.reply_text("Saved: " + _line(exp))
+    await update.message.reply_text(s.SAVED_ONE_EXPENSE.format(line=_line(exp)))
 
 
 async def _step(update, ctx, exp):
     if exp.get("amount") is None:
-        await update.message.reply_text("Couldn't read the amount. E.g. “water 5 eur” or “65 fuel”.")
+        await update.message.reply_text(s.NO_AMOUNT)
         return
     exp = normalize(exp)
     need = next_missing(exp)
     if need == "fuel":
         exp["_fuel_asked"] = True
         ctx.user_data["pending"] = exp
-        await update.message.reply_text("Price per liter? (e.g. 1.65) — or “-” to skip.")
+        await update.message.reply_text(s.ASK_FUEL_PRICE)
         return
     if need == "place":
         exp["_place_asked"] = True
         ctx.user_data["pending"] = exp
-        await update.message.reply_text("Where? store / market / other — or “-”.")
+        await update.message.reply_text(s.ASK_PLACE)
         return
     ctx.user_data.pop("pending", None)
     await _finalize(update, ctx, exp)
@@ -144,7 +145,7 @@ async def _answer_pending(update, ctx, text):
         if not _skip(text):
             price = _num(text)
             if not price:
-                await update.message.reply_text("Couldn't read the number. Price per liter, e.g. 1.65 — or “-”.")
+                await update.message.reply_text(s.BAD_FUEL_PRICE)
                 return
             exp["price_per_liter"] = price
             exp["liters"] = round(float(exp["amount"]) / price, 2)
@@ -158,13 +159,13 @@ async def _answer_pending(update, ctx, text):
 async def _route(update, ctx, items):
     items = [normalize(e) for e in items if e.get("amount") is not None]
     if not items:
-        await update.message.reply_text("Couldn't read any expense. Example: “water 5 eur”.")
+        await update.message.reply_text(s.NO_EXPENSE_PARSED)
         return
     if len(items) == 1:
         await _step(update, ctx, items[0])
         return
     ctx.user_data["confirm"] = items
-    await update.message.reply_text(format_batch(items) + "\n\nSave all? yes / no")
+    await update.message.reply_text(format_batch(items) + "\n\n" + s.CONFIRM_SAVE_ALL)
 
 
 async def _answer_confirm(update, ctx, text):
@@ -172,34 +173,35 @@ async def _answer_confirm(update, ctx, text):
         items = ctx.user_data.pop("confirm")
         n = await asyncio.to_thread(sheets.append_many, items)
         ctx.user_data["last_write"] = {"kind": "expense"}
-        await update.message.reply_text(f"Saved {n} expense(s).")
+        await update.message.reply_text(s.SAVED_N_EXPENSES.format(n=n))
     elif is_no(text):
         ctx.user_data.pop("confirm", None)
-        await update.message.reply_text("Cancelled, nothing saved.")
+        await update.message.reply_text(s.CANCELLED_NOTHING_SAVED)
     else:
-        await update.message.reply_text("Please answer “yes” or “no”.")
+        await update.message.reply_text(s.ASK_YES_NO)
 
 
 # ---- income: confirm before writing to the income sheet ----
 async def _route_income(update, ctx, items):
     items = [e for e in items if e.get("amount") is not None]
     if not items:
-        await update.message.reply_text("Couldn't read the income. Example: “+4000 salary”.")
+        await update.message.reply_text(s.NO_INCOME_PARSED)
         return
     ctx.user_data["confirm_income"] = items
-    await update.message.reply_text(format_income(items) + "\n\nSave to income? yes / no")
+    await update.message.reply_text(format_income(items) + "\n\n" + s.CONFIRM_SAVE_INCOME)
 
 
 async def _answer_confirm_income(update, ctx, text):
     if is_yes(text):
         items = ctx.user_data.pop("confirm_income")
         n = await asyncio.to_thread(sheets.append_income_many, items)
-        await update.message.reply_text(f"Saved income ({n} item(s)) to “{config.INCOME_WORKSHEET}”.")
+        await update.message.reply_text(
+            s.SAVED_INCOME.format(n=n, worksheet=config.INCOME_WORKSHEET))
     elif is_no(text):
         ctx.user_data.pop("confirm_income", None)
-        await update.message.reply_text("Cancelled, income not saved.")
+        await update.message.reply_text(s.CANCELLED_INCOME_NOT_SAVED)
     else:
-        await update.message.reply_text("Please answer “yes” or “no”.")
+        await update.message.reply_text(s.ASK_YES_NO)
 
 
 # ---- debts: lend/borrow/repay via /debt, list/history via /debts ----
@@ -222,7 +224,7 @@ async def _finalize_debt_action(update, ctx, action, person, amount, note):
     direction = debts.direction_for_repay(action)
     matches = await asyncio.to_thread(sheets.open_debts, person, direction)
     if not matches:
-        await update.message.reply_text(f"No open debt found for {person}.")
+        await update.message.reply_text(s.NO_OPEN_DEBT_FOR.format(person=person))
         return
     if len(matches) == 1:
         await _apply_repayment(update, ctx, matches[0], amount, note)
@@ -236,7 +238,7 @@ async def _answer_pending_repay(update, ctx, text):
     state = ctx.user_data["pending_repay"]
     idx = debts.parse_choice_number(text, len(state["debts"]))
     if idx is None:
-        await update.message.reply_text("Please reply with the debt number.")
+        await update.message.reply_text(s.ASK_DEBT_NUMBER)
         return
     ctx.user_data.pop("pending_repay")
     await _apply_repayment(update, ctx, state["debts"][idx], state["amount"], state["note"])
@@ -252,9 +254,9 @@ async def _ask_person(reply, ctx, action):
         persons = await asyncio.to_thread(sheets.persons_with_open_debt, direction)
         if not persons:
             ctx.user_data.pop("debt_wizard", None)
-            await reply("No open debts in that direction.")
+            await reply(s.NO_OPEN_DEBTS_DIRECTION)
             return
-    await reply(debts.ACTION_PROMPTS[action], reply_markup=debts.person_keyboard(persons))
+    await reply(s.ACTION_PROMPTS[action], reply_markup=debts.person_keyboard(persons))
 
 
 async def _start_debt_wizard(update, ctx, action=None):
@@ -282,7 +284,7 @@ async def on_debt_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data = query.data
     if data == debts.CB_CANCEL:
         ctx.user_data.pop("debt_wizard", None)
-        await reply("Cancelled.")
+        await reply(s.CANCELLED)
         return
     if data.startswith(f"{debts.CB_PREFIX}:action:"):
         action = data.split(":", 2)[2]
@@ -292,11 +294,11 @@ async def on_debt_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         name = data.split(":", 2)[2]
         wiz = ctx.user_data.get("debt_wizard")
         if not wiz:
-            await reply("Session expired — start again with /debt.")
+            await reply(s.SESSION_EXPIRED)
             return
         wiz["person"] = name
         wiz["step"] = "amount"
-        await reply(f"{name} — how much?")
+        await reply(s.ASK_AMOUNT_FOR.format(name=name))
         return
 
 
@@ -304,21 +306,21 @@ async def _answer_debt_wizard(update, ctx, text):
     wiz = ctx.user_data["debt_wizard"]
     if text.strip().lower() in debts.CANCEL_WORDS:
         ctx.user_data.pop("debt_wizard")
-        await update.message.reply_text("Cancelled.")
+        await update.message.reply_text(s.CANCELLED)
         return
     if wiz["step"] == "person":
         wiz["person"] = text.strip()
         wiz["step"] = "amount"
-        await update.message.reply_text("How much?")
+        await update.message.reply_text(s.ASK_AMOUNT)
         return
     if wiz["step"] == "amount":
         amount = debts._num(text)
         if amount is None:
-            await update.message.reply_text("Couldn't read the amount, try again.")
+            await update.message.reply_text(s.BAD_AMOUNT)
             return
         wiz["amount"] = amount
         wiz["step"] = "note"
-        await update.message.reply_text("Note? (or “-” to skip)")
+        await update.message.reply_text(s.ASK_NOTE)
         return
     note = "" if _skip(text) else text.strip()
     ctx.user_data.pop("debt_wizard")
@@ -368,25 +370,7 @@ def _authorized(update):
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
-    await update.message.reply_text(
-        "I log your expenses into a budget tracker sheet.\n\n"
-        "One line: “water 5 eur”, “65 fuel”, “groceries store 19.21”.\n"
-        "A batch — several expenses, one per line, optionally with a date:\n"
-        "  yesterday\n  1) lunch cafe 12.1\n  2) groceries 23.49\n"
-        "I understand “yesterday / day before yesterday / today / DD.MM”. "
-        "You can also send a receipt photo or a voice message.\n\n"
-        "Income — prefix with “+”: “+4000 salary”, “+150 freelance refund”. Goes to a separate sheet.\n\n"
-        "Debts:\n"
-        "  /debt — guided menu (buttons): pick lend/borrow/repay, then who, amount, note\n"
-        "  /debt дал <name> <amount> [note] — you lent money (also: одолжил)\n"
-        "  /debt занял <name> <amount> [note] — you borrowed money (also: взял)\n"
-        "  /debt вернул <name> <amount> [note] — you repaid what you owed (also: отдал, погасил)\n"
-        "  /debt вернули <name> <amount> [note] — they repaid what they owed you\n"
-        "  /debts [name] — open balances, or one person's history\n"
-        "  /debts closed [name] — fully repaid debts\n\n"
-        "/day /week /month — expense summaries   /category <name> — monthly trend for one category\n"
-        "/months — income vs. expenses per month\n"
-        "/income — income this month   /undo — delete the last entry")
+    await update.message.reply_text(s.HELP_TEXT)
 
 
 def week_bounds(today: date):
@@ -397,7 +381,7 @@ def week_bounds(today: date):
 
 async def _send_summary(update, title, total, by_cat):
     if total == 0:
-        await update.message.reply_text(f"{title}: no expenses.")
+        await update.message.reply_text(s.NO_EXPENSES_FOR.format(title=title))
         return
     lines = [f"{title}: {total:.2f} {SYM}\n"]
     for cat, amt in sorted(by_cat.items(), key=lambda x: -x[1]):
@@ -409,7 +393,7 @@ async def cmd_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
     ym, total, by_cat = await asyncio.to_thread(sheets.month_summary)
-    await _send_summary(update, f"Summary {ym}", total, by_cat)
+    await _send_summary(update, s.SUMMARY_MONTH_TITLE.format(ym=ym), total, by_cat)
 
 
 async def cmd_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -419,13 +403,13 @@ async def cmd_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             d = date.fromisoformat(ctx.args[0])
         except ValueError:
-            await update.message.reply_text("Date as YYYY-MM-DD, e.g. /day 2026-07-03")
+            await update.message.reply_text(s.BAD_DAY_ARG)
             return
     else:
         d = date.today()
     iso = d.isoformat()
     total, by_cat = await asyncio.to_thread(sheets.range_summary, iso, iso)
-    await _send_summary(update, f"Day {iso}", total, by_cat)
+    await _send_summary(update, s.SUMMARY_DAY_TITLE.format(iso=iso), total, by_cat)
 
 
 async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -433,28 +417,27 @@ async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     start, end = week_bounds(date.today())
     total, by_cat = await asyncio.to_thread(sheets.range_summary, start, end)
-    await _send_summary(update, f"Week {start} — {end}", total, by_cat)
+    await _send_summary(update, s.SUMMARY_WEEK_TITLE.format(start=start, end=end), total, by_cat)
 
 
 async def cmd_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
+    cat_list = "\n".join(f"  {c}" for c in CATEGORIES)
     if not ctx.args:
-        await update.message.reply_text(
-            "Usage: /category <name>\n\nCategories:\n" + "\n".join(f"  {c}" for c in CATEGORIES))
+        await update.message.reply_text(s.CATEGORY_USAGE.format(list=cat_list))
         return
     query = " ".join(ctx.args).lower()
     match = next((c for c in CATEGORIES if c.lower() == query), None) \
         or next((c for c in CATEGORIES if query in c.lower()), None)
     if not match:
-        await update.message.reply_text(
-            "Unknown category. Categories:\n" + "\n".join(f"  {c}" for c in CATEGORIES))
+        await update.message.reply_text(s.UNKNOWN_CATEGORY.format(list=cat_list))
         return
     history = await asyncio.to_thread(sheets.category_history, match)
     if not history:
-        await update.message.reply_text(f"{match}: no expenses yet.")
+        await update.message.reply_text(s.NO_EXPENSES_FOR_CATEGORY.format(category=match))
         return
-    lines = [f"{match} — last {len(history)} month(s):"]
+    lines = [s.CATEGORY_HISTORY_HEADER.format(category=match, n=len(history))]
     for ym, amt in history:
         lines.append(f"  {ym}  {amt:8.2f} {SYM}")
     await update.message.reply_text("\n".join(lines))
@@ -465,9 +448,9 @@ async def cmd_months(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     history = await asyncio.to_thread(sheets.months_summary)
     if not history:
-        await update.message.reply_text("No income or expenses recorded yet.")
+        await update.message.reply_text(s.NO_INCOME_OR_EXPENSES)
         return
-    lines = [f"Income vs. expenses — last {len(history)} month(s):"]
+    lines = [s.MONTHS_HISTORY_HEADER.format(n=len(history))]
     for ym, inc, exp in history:
         surplus = inc - exp
         sign = "+" if surplus >= 0 else "-"
@@ -482,9 +465,9 @@ async def cmd_income(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     ym, total, by_src = await asyncio.to_thread(sheets.income_summary)
     if total == 0:
-        await update.message.reply_text(f"{ym}: no income yet. Example: “+4000 salary”.")
+        await update.message.reply_text(s.NO_INCOME_THIS_MONTH.format(ym=ym))
         return
-    lines = [f"Income {ym}: {total:.2f} {SYM}\n"]
+    lines = [s.INCOME_MONTH_HEADER.format(ym=ym, total=total, sym=SYM)]
     for src, amt in sorted(by_src.items(), key=lambda x: -x[1]):
         lines.append(f"  {amt:8.2f} {SYM}  {src}")
     await update.message.reply_text("\n".join(lines))
@@ -508,9 +491,9 @@ async def cmd_undo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kind = ctx.user_data.pop("last_write", {}).get("kind", "expense")
     vals = await asyncio.to_thread(_UNDO_FUNCS[kind])
     if not vals:
-        await update.message.reply_text("Nothing to delete.")
+        await update.message.reply_text(s.NOTHING_TO_DELETE)
         return
-    await update.message.reply_text("Deleted: " + " · ".join(v for v in vals[:6] if v))
+    await update.message.reply_text(s.DELETED.format(summary=" · ".join(v for v in vals[:6] if v)))
 
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -539,7 +522,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         items = await asyncio.to_thread(parser.parse_text, update.message.text)
         await _route(update, ctx, items)
     except Exception as e:
-        log.exception("text"); await update.message.reply_text(f"Error: {e}")
+        log.exception("text"); await update.message.reply_text(s.ERROR.format(error=e))
 
 
 async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -551,7 +534,7 @@ async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         items = await asyncio.to_thread(parser.parse_image, img, update.message.caption or "")
         await _route(update, ctx, items)
     except Exception as e:
-        log.exception("photo"); await update.message.reply_text(f"Error: {e}")
+        log.exception("photo"); await update.message.reply_text(s.ERROR.format(error=e))
 
 
 async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -583,6 +566,6 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         items = await asyncio.to_thread(parser.parse_text, text)
         await _route(update, ctx, items)
     except ImportError:
-        await update.message.reply_text("Voice input is disabled (see README) — please type instead.")
+        await update.message.reply_text(s.VOICE_DISABLED)
     except Exception as e:
-        log.exception("voice"); await update.message.reply_text(f"Error: {e}")
+        log.exception("voice"); await update.message.reply_text(s.ERROR.format(error=e))
