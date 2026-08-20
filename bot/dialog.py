@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from . import sheets, parser, config, debts, strings as s
+from . import sheets, parser, config, debts, onboarding, store, strings as s
 from .categories import CATEGORIES, FUEL, GROCERIES, FALLBACK
 
 log = logging.getLogger("expense-bot")
@@ -113,13 +113,13 @@ def format_batch(items) -> str:
 
 
 # ---- write/reply (single expense with follow-ups) ----
-async def _finalize(update, ctx, exp):
-    await asyncio.to_thread(sheets.append_expense, exp)
+async def _finalize(update, ctx, sid, exp):
+    await asyncio.to_thread(sheets.append_expense, sid, exp)
     ctx.user_data["last_write"] = {"kind": "expense"}
     await update.message.reply_text(s.SAVED_ONE_EXPENSE.format(line=_line(exp)))
 
 
-async def _step(update, ctx, exp):
+async def _step(update, ctx, sid, exp):
     if exp.get("amount") is None:
         await update.message.reply_text(s.NO_AMOUNT)
         return
@@ -136,10 +136,10 @@ async def _step(update, ctx, exp):
         await update.message.reply_text(s.ASK_PLACE)
         return
     ctx.user_data.pop("pending", None)
-    await _finalize(update, ctx, exp)
+    await _finalize(update, ctx, sid, exp)
 
 
-async def _answer_pending(update, ctx, text):
+async def _answer_pending(update, ctx, sid, text):
     exp = ctx.user_data["pending"]
     if exp.get("_fuel_asked") and not exp.get("liters"):
         if not _skip(text):
@@ -152,26 +152,26 @@ async def _answer_pending(update, ctx, text):
     elif exp.get("_place_asked") and not exp.get("place"):
         if not _skip(text):
             exp["place"] = text.strip()
-    await _step(update, ctx, exp)
+    await _step(update, ctx, sid, exp)
 
 
 # ---- batch of expenses: confirm before writing ----
-async def _route(update, ctx, items):
+async def _route(update, ctx, sid, items):
     items = [normalize(e) for e in items if e.get("amount") is not None]
     if not items:
         await update.message.reply_text(s.NO_EXPENSE_PARSED)
         return
     if len(items) == 1:
-        await _step(update, ctx, items[0])
+        await _step(update, ctx, sid, items[0])
         return
     ctx.user_data["confirm"] = items
     await update.message.reply_text(format_batch(items) + "\n\n" + s.CONFIRM_SAVE_ALL)
 
 
-async def _answer_confirm(update, ctx, text):
+async def _answer_confirm(update, ctx, sid, text):
     if is_yes(text):
         items = ctx.user_data.pop("confirm")
-        n = await asyncio.to_thread(sheets.append_many, items)
+        n = await asyncio.to_thread(sheets.append_many, sid, items)
         ctx.user_data["last_write"] = {"kind": "expense"}
         await update.message.reply_text(s.SAVED_N_EXPENSES.format(n=n))
     elif is_no(text):
@@ -191,10 +191,10 @@ async def _route_income(update, ctx, items):
     await update.message.reply_text(format_income(items) + "\n\n" + s.CONFIRM_SAVE_INCOME)
 
 
-async def _answer_confirm_income(update, ctx, text):
+async def _answer_confirm_income(update, ctx, sid, text):
     if is_yes(text):
         items = ctx.user_data.pop("confirm_income")
-        n = await asyncio.to_thread(sheets.append_income_many, items)
+        n = await asyncio.to_thread(sheets.append_income_many, sid, items)
         await update.message.reply_text(
             s.SAVED_INCOME.format(n=n, worksheet=config.INCOME_WORKSHEET))
     elif is_no(text):
@@ -205,53 +205,53 @@ async def _answer_confirm_income(update, ctx, text):
 
 
 # ---- debts: lend/borrow/repay via /debt, list/history via /debts ----
-async def _apply_repayment(update, ctx, debt, amount, note):
-    await asyncio.to_thread(sheets.append_repayment, None, debt["id"], amount, note)
-    updated = await asyncio.to_thread(sheets.debt_by_id, debt["id"])
+async def _apply_repayment(update, ctx, sid, debt, amount, note):
+    await asyncio.to_thread(sheets.append_repayment, sid, None, debt["id"], amount, note)
+    updated = await asyncio.to_thread(sheets.debt_by_id, sid, debt["id"])
     ctx.user_data["last_write"] = {"kind": "repayment"}
     await update.message.reply_text(debts.format_repay_result(updated, amount))
 
 
-async def _finalize_debt_action(update, ctx, action, person, amount, note):
+async def _finalize_debt_action(update, ctx, sid, action, person, amount, note):
     if action in ("lend", "borrow"):
         direction = debts.direction_for_create(action)
         await asyncio.to_thread(
-            sheets.append_debt, None, person, direction, amount, config.CURRENCY_CODE, note)
+            sheets.append_debt, sid, None, person, direction, amount, config.CURRENCY_CODE, note)
         ctx.user_data["last_write"] = {"kind": "debt"}
         await update.message.reply_text(debts.format_debt_created(direction, person, amount, note))
         return
 
     direction = debts.direction_for_repay(action)
-    matches = await asyncio.to_thread(sheets.open_debts, person, direction)
+    matches = await asyncio.to_thread(sheets.open_debts, sid, person, direction)
     if not matches:
         await update.message.reply_text(s.NO_OPEN_DEBT_FOR.format(person=person))
         return
     if len(matches) == 1:
-        await _apply_repayment(update, ctx, matches[0], amount, note)
+        await _apply_repayment(update, ctx, sid, matches[0], amount, note)
         return
     ctx.user_data["pending_repay"] = {
         "debts": matches, "amount": amount, "note": note, "person": person}
     await update.message.reply_text(debts.format_repay_choices(matches, person))
 
 
-async def _answer_pending_repay(update, ctx, text):
+async def _answer_pending_repay(update, ctx, sid, text):
     state = ctx.user_data["pending_repay"]
     idx = debts.parse_choice_number(text, len(state["debts"]))
     if idx is None:
         await update.message.reply_text(s.ASK_DEBT_NUMBER)
         return
     ctx.user_data.pop("pending_repay")
-    await _apply_repayment(update, ctx, state["debts"][idx], state["amount"], state["note"])
+    await _apply_repayment(update, ctx, sid, state["debts"][idx], state["amount"], state["note"])
 
 
 # ---- guided /debt menu: buttons for action -> person -> typed amount -> typed note ----
-async def _ask_person(reply, ctx, action):
+async def _ask_person(reply, ctx, sid, action):
     ctx.user_data["debt_wizard"] = {"action": action, "step": "person"}
     if action in ("lend", "borrow"):
-        persons = await asyncio.to_thread(sheets.recent_debt_persons)
+        persons = await asyncio.to_thread(sheets.recent_debt_persons, sid)
     else:
         direction = debts.direction_for_repay(action)
-        persons = await asyncio.to_thread(sheets.persons_with_open_debt, direction)
+        persons = await asyncio.to_thread(sheets.persons_with_open_debt, sid, direction)
         if not persons:
             ctx.user_data.pop("debt_wizard", None)
             await reply(s.NO_OPEN_DEBTS_DIRECTION)
@@ -259,16 +259,16 @@ async def _ask_person(reply, ctx, action):
     await reply(s.ACTION_PROMPTS[action], reply_markup=debts.person_keyboard(persons))
 
 
-async def _start_debt_wizard(update, ctx, action=None):
+async def _start_debt_wizard(update, ctx, sid, action=None):
     async def reply(text, reply_markup=None):
         await update.message.reply_text(text, reply_markup=reply_markup)
 
     if action is None:
-        open_all = await asyncio.to_thread(sheets.open_debts)
+        open_all = await asyncio.to_thread(sheets.open_debts, sid)
         summary = debts.format_open_list(open_all)
         await reply(summary + "\n\nWhat do you want to do?", debts.action_keyboard())
         return
-    await _ask_person(reply, ctx, action)
+    await _ask_person(reply, ctx, sid, action)
 
 
 async def on_debt_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -281,6 +281,11 @@ async def on_debt_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     async def reply(text, reply_markup=None):
         await query.edit_message_text(text, reply_markup=reply_markup)
 
+    sid = store.get_sheet(update.effective_user.id)
+    if sid is None:
+        await reply(s.NOT_CONNECTED)
+        return
+
     data = query.data
     if data == debts.CB_CANCEL:
         ctx.user_data.pop("debt_wizard", None)
@@ -288,7 +293,7 @@ async def on_debt_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if data.startswith(f"{debts.CB_PREFIX}:action:"):
         action = data.split(":", 2)[2]
-        await _ask_person(reply, ctx, action)
+        await _ask_person(reply, ctx, sid, action)
         return
     if data.startswith(f"{debts.CB_PREFIX}:person:"):
         name = data.split(":", 2)[2]
@@ -302,7 +307,7 @@ async def on_debt_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
 
-async def _answer_debt_wizard(update, ctx, text):
+async def _answer_debt_wizard(update, ctx, sid, text):
     wiz = ctx.user_data["debt_wizard"]
     if text.strip().lower() in debts.CANCEL_WORDS:
         ctx.user_data.pop("debt_wizard")
@@ -324,17 +329,20 @@ async def _answer_debt_wizard(update, ctx, text):
         return
     note = "" if _skip(text) else text.strip()
     ctx.user_data.pop("debt_wizard")
-    await _finalize_debt_action(update, ctx, wiz["action"], wiz["person"], wiz["amount"], note)
+    await _finalize_debt_action(update, ctx, sid, wiz["action"], wiz["person"], wiz["amount"], note)
 
 
 async def cmd_debt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
+    sid = await _require_sheet(update)
+    if sid is None:
+        return
     if not ctx.args:
-        await _start_debt_wizard(update, ctx)
+        await _start_debt_wizard(update, ctx, sid)
         return
     if len(ctx.args) == 1 and ctx.args[0].lower() in debts.ACTIONS:
-        await _start_debt_wizard(update, ctx, action=debts.ACTIONS[ctx.args[0].lower()])
+        await _start_debt_wizard(update, ctx, sid, action=debts.ACTIONS[ctx.args[0].lower()])
         return
     try:
         parsed = debts.parse_debt_command(ctx.args)
@@ -342,23 +350,26 @@ async def cmd_debt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(str(e))
         return
     await _finalize_debt_action(
-        update, ctx, parsed["action"], parsed["person"], parsed["amount"], parsed["note"])
+        update, ctx, sid, parsed["action"], parsed["person"], parsed["amount"], parsed["note"])
 
 
 async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
+    sid = await _require_sheet(update)
+    if sid is None:
+        return
     if ctx.args and ctx.args[0].lower() == "closed":
         person = " ".join(ctx.args[1:]) if len(ctx.args) > 1 else None
-        closed = await asyncio.to_thread(sheets.closed_debts, person)
+        closed = await asyncio.to_thread(sheets.closed_debts, sid, person)
         await update.message.reply_text(debts.format_closed_list(closed))
         return
     if ctx.args:
         person = " ".join(ctx.args)
-        history = await asyncio.to_thread(sheets.debt_history, person)
+        history = await asyncio.to_thread(sheets.debt_history, sid, person)
         await update.message.reply_text(debts.format_person_history(person, history))
         return
-    open_all = await asyncio.to_thread(sheets.open_debts)
+    open_all = await asyncio.to_thread(sheets.open_debts, sid)
     await update.message.reply_text(debts.format_open_list(open_all))
 
 
@@ -367,10 +378,136 @@ def _authorized(update):
     return not config.ALLOWED_USER_IDS or str(update.effective_user.id) in config.ALLOWED_USER_IDS
 
 
+async def _require_sheet(update):
+    """The user's connected sheet id, or None (after nudging them to /start) if not set."""
+    sid = store.get_sheet(update.effective_user.id)
+    if sid is None:
+        await update.message.reply_text(s.NOT_CONNECTED)
+    return sid
+
+
+# ---- onboarding wizard ----
+def _onb_view(step):
+    """(text, keyboard) to show for a wizard step."""
+    if step == onboarding.STEP_COPY:
+        text = s.ONB_COPY_TEMPLATE if config.TEMPLATE_SHEET_URL else s.ONB_COPY_NO_TEMPLATE
+        return text, onboarding.copy_keyboard()
+    if step == onboarding.STEP_GRANT:
+        return s.ONB_GRANT_ACCESS.format(email=config.SA_EMAIL), onboarding.grant_keyboard()
+    if step == onboarding.STEP_LINK:
+        return s.ONB_SEND_LINK, onboarding.cancel_keyboard()
+    return s.ONB_WELCOME, onboarding.welcome_keyboard()
+
+
+async def _start_onboarding(update, ctx):
+    ctx.user_data.clear()  # drop any stale pending/confirm state before setup
+    ctx.user_data["onboarding"] = {"step": onboarding.STEP_WELCOME}
+    text, kb = _onb_view(onboarding.STEP_WELCOME)
+    await update.message.reply_text(text, reply_markup=kb)
+
+
+async def on_onboarding_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized(update):
+        await query.answer()
+        return
+    await query.answer()
+    data = query.data
+    if data == onboarding.CB_CANCEL:
+        ctx.user_data.pop("onboarding", None)
+        await query.edit_message_text(s.CANCELLED)
+        return
+    state = ctx.user_data.get("onboarding")
+    if not state:
+        await query.edit_message_text(s.ONB_SESSION_EXPIRED)
+        return
+    nxt = onboarding.next_step(state["step"], data)
+    if nxt is None:
+        return  # stale button that doesn't apply to the current step
+    state["step"] = nxt
+    text, kb = _onb_view(nxt)
+    await query.edit_message_text(text, reply_markup=kb)
+
+
+async def _answer_onboarding(update, ctx, text):
+    state = ctx.user_data["onboarding"]
+    if text.strip().lower() in debts.CANCEL_WORDS:
+        ctx.user_data.pop("onboarding", None)
+        await update.message.reply_text(s.CANCELLED)
+        return
+    if state["step"] != onboarding.STEP_LINK:
+        # Typed before reaching the link step — re-show the current step.
+        cur_text, kb = _onb_view(state["step"])
+        await update.message.reply_text(cur_text, reply_markup=kb)
+        return
+    sid = onboarding.parse_sheet_id(text)
+    if sid is None:
+        await update.message.reply_text(s.ONB_BAD_LINK)
+        return
+    await update.message.reply_text(s.ONB_CHECKING)
+    await _finish_connect(update, ctx, sid)
+
+
+async def _finish_connect(update, ctx, sid):
+    """Validate access and connect, or bounce back to the step that needs fixing."""
+    try:
+        title = await asyncio.to_thread(sheets.connect_and_validate, sid)
+    except PermissionError:
+        if "onboarding" in ctx.user_data:
+            ctx.user_data["onboarding"]["step"] = onboarding.STEP_GRANT
+        await update.message.reply_text(
+            s.CONNECT_NO_ACCESS.format(email=config.SA_EMAIL),
+            reply_markup=onboarding.grant_keyboard() if "onboarding" in ctx.user_data else None)
+        return
+    except sheets.BadTemplate:
+        if "onboarding" in ctx.user_data:
+            ctx.user_data["onboarding"]["step"] = onboarding.STEP_COPY
+            cur_text, kb = _onb_view(onboarding.STEP_COPY)
+            await update.message.reply_text(s.CONNECT_BAD_TEMPLATE)
+            await update.message.reply_text(cur_text, reply_markup=kb)
+        else:
+            await update.message.reply_text(s.CONNECT_BAD_TEMPLATE)
+        return
+    store.set_sheet(update.effective_user.id, sid)
+    ctx.user_data.pop("onboarding", None)
+    await update.message.reply_text(s.CONNECTED_OK.format(title=title))
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
+    if store.is_connected(update.effective_user.id):
+        await update.message.reply_text(s.HELP_TEXT)
+        return
+    await _start_onboarding(update, ctx)
+
+
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
     await update.message.reply_text(s.HELP_TEXT)
+
+
+async def cmd_connect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Fast path for experienced users: /connect <link>. Onboarding via /start is the norm."""
+    if not _authorized(update):
+        return
+    if not ctx.args:
+        await update.message.reply_text(s.CONNECT_USAGE)
+        return
+    sid = onboarding.parse_sheet_id(" ".join(ctx.args))
+    if sid is None:
+        await update.message.reply_text(s.CONNECT_USAGE)
+        return
+    await update.message.reply_text(s.ONB_CHECKING)
+    await _finish_connect(update, ctx, sid)
+
+
+async def cmd_disconnect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    store.disconnect(update.effective_user.id)
+    await update.message.reply_text(s.DISCONNECTED)
 
 
 def week_bounds(today: date):
@@ -392,12 +529,18 @@ async def _send_summary(update, title, total, by_cat):
 async def cmd_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
-    ym, total, by_cat = await asyncio.to_thread(sheets.month_summary)
+    sid = await _require_sheet(update)
+    if sid is None:
+        return
+    ym, total, by_cat = await asyncio.to_thread(sheets.month_summary, sid)
     await _send_summary(update, s.SUMMARY_MONTH_TITLE.format(ym=ym), total, by_cat)
 
 
 async def cmd_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
+        return
+    sid = await _require_sheet(update)
+    if sid is None:
         return
     if ctx.args:
         try:
@@ -408,20 +551,26 @@ async def cmd_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         d = date.today()
     iso = d.isoformat()
-    total, by_cat = await asyncio.to_thread(sheets.range_summary, iso, iso)
+    total, by_cat = await asyncio.to_thread(sheets.range_summary, sid, iso, iso)
     await _send_summary(update, s.SUMMARY_DAY_TITLE.format(iso=iso), total, by_cat)
 
 
 async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
+    sid = await _require_sheet(update)
+    if sid is None:
+        return
     start, end = week_bounds(date.today())
-    total, by_cat = await asyncio.to_thread(sheets.range_summary, start, end)
+    total, by_cat = await asyncio.to_thread(sheets.range_summary, sid, start, end)
     await _send_summary(update, s.SUMMARY_WEEK_TITLE.format(start=start, end=end), total, by_cat)
 
 
 async def cmd_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
+        return
+    sid = await _require_sheet(update)
+    if sid is None:
         return
     cat_list = "\n".join(f"  {c}" for c in CATEGORIES)
     if not ctx.args:
@@ -433,7 +582,7 @@ async def cmd_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not match:
         await update.message.reply_text(s.UNKNOWN_CATEGORY.format(list=cat_list))
         return
-    history = await asyncio.to_thread(sheets.category_history, match)
+    history = await asyncio.to_thread(sheets.category_history, sid, match)
     if not history:
         await update.message.reply_text(s.NO_EXPENSES_FOR_CATEGORY.format(category=match))
         return
@@ -446,7 +595,10 @@ async def cmd_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_months(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
-    history = await asyncio.to_thread(sheets.months_summary)
+    sid = await _require_sheet(update)
+    if sid is None:
+        return
+    history = await asyncio.to_thread(sheets.months_summary, sid)
     if not history:
         await update.message.reply_text(s.NO_INCOME_OR_EXPENSES)
         return
@@ -463,7 +615,10 @@ async def cmd_months(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_income(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
-    ym, total, by_src = await asyncio.to_thread(sheets.income_summary)
+    sid = await _require_sheet(update)
+    if sid is None:
+        return
+    ym, total, by_src = await asyncio.to_thread(sheets.income_summary, sid)
     if total == 0:
         await update.message.reply_text(s.NO_INCOME_THIS_MONTH.format(ym=ym))
         return
@@ -483,44 +638,59 @@ _UNDO_FUNCS = {
 async def cmd_undo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
+    sid = await _require_sheet(update)
+    if sid is None:
+        return
     ctx.user_data.pop("pending", None)
     ctx.user_data.pop("confirm", None)
     ctx.user_data.pop("confirm_income", None)
     ctx.user_data.pop("pending_repay", None)
     ctx.user_data.pop("debt_wizard", None)
     kind = ctx.user_data.pop("last_write", {}).get("kind", "expense")
-    vals = await asyncio.to_thread(_UNDO_FUNCS[kind])
+    vals = await asyncio.to_thread(_UNDO_FUNCS[kind], sid)
     if not vals:
         await update.message.reply_text(s.NOTHING_TO_DELETE)
         return
     await update.message.reply_text(s.DELETED.format(summary=" · ".join(v for v in vals[:6] if v)))
 
 
+async def _handle_input(update, ctx, sid, text):
+    """Route a text/voice message through the active conversation state to the sheet."""
+    if "confirm" in ctx.user_data:
+        await _answer_confirm(update, ctx, sid, text)
+        return
+    if "confirm_income" in ctx.user_data:
+        await _answer_confirm_income(update, ctx, sid, text)
+        return
+    if "pending" in ctx.user_data:
+        await _answer_pending(update, ctx, sid, text)
+        return
+    if "pending_repay" in ctx.user_data:
+        await _answer_pending_repay(update, ctx, sid, text)
+        return
+    if "debt_wizard" in ctx.user_data:
+        await _answer_debt_wizard(update, ctx, sid, text)
+        return
+    if is_income(text):
+        items = await asyncio.to_thread(parser.parse_income, text)
+        await _route_income(update, ctx, items)
+        return
+    items = await asyncio.to_thread(parser.parse_text, text)
+    await _route(update, ctx, sid, items)
+
+
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
     try:
-        if "confirm" in ctx.user_data:
-            await _answer_confirm(update, ctx, update.message.text)
+        if "onboarding" in ctx.user_data:
+            await _answer_onboarding(update, ctx, update.message.text)
             return
-        if "confirm_income" in ctx.user_data:
-            await _answer_confirm_income(update, ctx, update.message.text)
+        sid = store.get_sheet(update.effective_user.id)
+        if sid is None:
+            await _start_onboarding(update, ctx)  # walk a new user through setup
             return
-        if "pending" in ctx.user_data:
-            await _answer_pending(update, ctx, update.message.text)
-            return
-        if "pending_repay" in ctx.user_data:
-            await _answer_pending_repay(update, ctx, update.message.text)
-            return
-        if "debt_wizard" in ctx.user_data:
-            await _answer_debt_wizard(update, ctx, update.message.text)
-            return
-        if is_income(update.message.text):
-            items = await asyncio.to_thread(parser.parse_income, update.message.text)
-            await _route_income(update, ctx, items)
-            return
-        items = await asyncio.to_thread(parser.parse_text, update.message.text)
-        await _route(update, ctx, items)
+        await _handle_input(update, ctx, sid, update.message.text)
     except Exception as e:
         log.exception("text"); await update.message.reply_text(s.ERROR.format(error=e))
 
@@ -529,10 +699,13 @@ async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
     try:
+        sid = await _require_sheet(update)
+        if sid is None:
+            return
         f = await ctx.bot.get_file(update.message.photo[-1].file_id)
         img = bytes(await f.download_as_bytearray())
         items = await asyncio.to_thread(parser.parse_image, img, update.message.caption or "")
-        await _route(update, ctx, items)
+        await _route(update, ctx, sid, items)
     except Exception as e:
         log.exception("photo"); await update.message.reply_text(s.ERROR.format(error=e))
 
@@ -541,30 +714,13 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
     try:
+        sid = await _require_sheet(update)
+        if sid is None:
+            return
         f = await ctx.bot.get_file(update.message.voice.file_id)
         ogg = bytes(await f.download_as_bytearray())
         text = await asyncio.to_thread(parser.transcribe_voice, ogg)
-        if "confirm" in ctx.user_data:
-            await _answer_confirm(update, ctx, text)
-            return
-        if "confirm_income" in ctx.user_data:
-            await _answer_confirm_income(update, ctx, text)
-            return
-        if "pending" in ctx.user_data:
-            await _answer_pending(update, ctx, text)
-            return
-        if "pending_repay" in ctx.user_data:
-            await _answer_pending_repay(update, ctx, text)
-            return
-        if "debt_wizard" in ctx.user_data:
-            await _answer_debt_wizard(update, ctx, text)
-            return
-        if is_income(text):
-            items = await asyncio.to_thread(parser.parse_income, text)
-            await _route_income(update, ctx, items)
-            return
-        items = await asyncio.to_thread(parser.parse_text, text)
-        await _route(update, ctx, items)
+        await _handle_input(update, ctx, sid, text)
     except ImportError:
         await update.message.reply_text(s.VOICE_DISABLED)
     except Exception as e:

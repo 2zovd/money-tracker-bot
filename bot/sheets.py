@@ -12,18 +12,50 @@ _DEBTS_HEADER = ["Date", "Person", "Direction", "Amount", "Currency", "Note"]
 _REPAYMENTS_HEADER = ["Date", "DebtID", "Amount", "Note"]
 
 
-def _sheet():
-    creds = Credentials.from_service_account_file(config.SA_FILE, scopes=_SCOPES)
-    return gspread.authorize(creds).open_by_key(config.SHEET_ID)
+_client = None
 
 
-def _ws():
-    return _sheet().worksheet(config.WORKSHEET)
+def _authorize():
+    """The gspread client, authorized once and cached (one service account for all users)."""
+    global _client
+    if _client is None:
+        creds = Credentials.from_service_account_file(config.SA_FILE, scopes=_SCOPES)
+        _client = gspread.authorize(creds)
+    return _client
 
 
-def _income_ws():
+def _sheet(sheet_id: str):
+    return _authorize().open_by_key(sheet_id)
+
+
+class BadTemplate(Exception):
+    """The sheet opened, but it's not a copy of our template (no expenses tab)."""
+
+
+def connect_and_validate(sheet_id: str) -> str:
+    """Open the user's spreadsheet and confirm it looks like our template.
+
+    Returns the spreadsheet title on success. Raises PermissionError if the service
+    account can't open it (wrong id or not shared), and BadTemplate if the expenses tab
+    is missing."""
+    try:
+        sh = _sheet(sheet_id)
+    except (gspread.SpreadsheetNotFound, gspread.exceptions.APIError) as e:
+        raise PermissionError(sheet_id) from e
+    try:
+        sh.worksheet(config.WORKSHEET)  # expenses tab must pre-exist
+    except gspread.WorksheetNotFound as e:
+        raise BadTemplate(sheet_id) from e
+    return sh.title
+
+
+def _ws(sheet_id: str):
+    return _sheet(sheet_id).worksheet(config.WORKSHEET)
+
+
+def _income_ws(sheet_id: str):
     """Income log sheet. Created on first use (header in row 1)."""
-    sh = _sheet()
+    sh = _sheet(sheet_id)
     try:
         return sh.worksheet(config.INCOME_WORKSHEET)
     except gspread.WorksheetNotFound:
@@ -32,9 +64,9 @@ def _income_ws():
         return ws
 
 
-def _debts_ws():
+def _debts_ws(sheet_id: str):
     """Debts sheet: one row per debt (lent/borrowed). Created on first use."""
-    sh = _sheet()
+    sh = _sheet(sheet_id)
     try:
         return sh.worksheet(config.DEBTS_WORKSHEET)
     except gspread.WorksheetNotFound:
@@ -43,9 +75,9 @@ def _debts_ws():
         return ws
 
 
-def _repayments_ws():
+def _repayments_ws(sheet_id: str):
     """Repayments sheet: one row per repayment, linked to a debt by row number (DebtID)."""
-    sh = _sheet()
+    sh = _sheet(sheet_id)
     try:
         return sh.worksheet(config.REPAYMENTS_WORKSHEET)
     except gspread.WorksheetNotFound:
@@ -72,15 +104,15 @@ def _write_row(ws, row, exp):
               value_input_option="USER_ENTERED")
 
 
-def append_expense(exp: dict) -> int:
-    ws = _ws()
+def append_expense(sheet_id: str, exp: dict) -> int:
+    ws = _ws(sheet_id)
     row = _first_empty_row(ws)
     _write_row(ws, row, exp)
     return row
 
 
-def append_many(items: list) -> int:
-    ws = _ws()
+def append_many(sheet_id: str, items: list) -> int:
+    ws = _ws(sheet_id)
     row = _first_empty_row(ws)
     for exp in items:
         _write_row(ws, row, exp)
@@ -95,10 +127,10 @@ def _amount(s):
     return float(s.replace(",", ""))  # comma = thousands separator
 
 
-def _expense_rows():
+def _expense_rows(sheet_id: str):
     """(date 'YYYY-MM-DD', category, amount) for each filled row of the journal."""
     out = []
-    for r in _ws().get_all_values()[3:]:
+    for r in _ws(sheet_id).get_all_values()[3:]:
         if len(r) < 3 or not r[0]:
             continue
         try:
@@ -109,46 +141,46 @@ def _expense_rows():
     return out
 
 
-def range_summary(start: str, end: str):
+def range_summary(sheet_id: str, start: str, end: str):
     """Total and per-category breakdown over [start, end] (inclusive 'YYYY-MM-DD')."""
     total, by_cat = 0.0, {}
-    for d, cat, amt in _expense_rows():
+    for d, cat, amt in _expense_rows(sheet_id):
         if start <= d <= end:
             total += amt
             by_cat[cat] = by_cat.get(cat, 0.0) + amt
     return total, by_cat
 
 
-def month_summary():
+def month_summary(sheet_id: str):
     ym = datetime.now().strftime("%Y-%m")
     total, by_cat = 0.0, {}
-    for d, cat, amt in _expense_rows():
+    for d, cat, amt in _expense_rows(sheet_id):
         if d[:7] == ym:
             total += amt
             by_cat[cat] = by_cat.get(cat, 0.0) + amt
     return ym, total, by_cat
 
 
-def category_history(category: str, months: int = 6):
+def category_history(sheet_id: str, category: str, months: int = 6):
     """[(YYYY-MM, total), ...] for one category, oldest first, last `months` months with data."""
     by_month = {}
-    for d, cat, amt in _expense_rows():
+    for d, cat, amt in _expense_rows(sheet_id):
         if cat.lower() == category.lower():
             ym = d[:7]
             by_month[ym] = by_month.get(ym, 0.0) + amt
     return sorted(by_month.items())[-months:]
 
 
-def months_summary(months: int = 6):
+def months_summary(sheet_id: str, months: int = 6):
     """[(YYYY-MM, income_total, expense_total), ...] for the last `months` months
     with any activity, oldest first."""
     by_month = {}  # ym -> [income, expense]
 
-    for d, _cat, amt in _expense_rows():
+    for d, _cat, amt in _expense_rows(sheet_id):
         ym = d[:7]
         by_month.setdefault(ym, [0.0, 0.0])[1] += amt
 
-    for r in _income_ws().get_all_values()[1:]:  # row 1 is the header
+    for r in _income_ws(sheet_id).get_all_values()[1:]:  # row 1 is the header
         if len(r) < 2 or not r[0]:
             continue
         try:
@@ -162,8 +194,8 @@ def months_summary(months: int = 6):
     return items[-months:]
 
 
-def undo_last():
-    ws = _ws()
+def undo_last(sheet_id: str):
+    ws = _ws(sheet_id)
     row = _first_empty_row(ws) - 1
     if row <= 3:
         return None
@@ -181,8 +213,8 @@ def _write_income(ws, row, inc):
               value_input_option="USER_ENTERED")
 
 
-def append_income_many(items: list) -> int:
-    ws = _income_ws()
+def append_income_many(sheet_id: str, items: list) -> int:
+    ws = _income_ws(sheet_id)
     row = _first_empty_row(ws)
     for inc in items:
         _write_income(ws, row, inc)
@@ -190,8 +222,8 @@ def append_income_many(items: list) -> int:
     return len(items)
 
 
-def income_summary():
-    ws = _income_ws()
+def income_summary(sheet_id: str):
+    ws = _income_ws(sheet_id)
     rows = ws.get_all_values()
     ym = datetime.now().strftime("%Y-%m")
     total, by_src = 0.0, {}
@@ -210,8 +242,8 @@ def income_summary():
 
 # ---- debts: A:Date B:Person C:Direction(lent/borrowed) D:Amount E:Currency F:Note ----
 # A debt's ID is its row number in the Debts sheet (no separate counter needed).
-def append_debt(date, person, direction, amount, currency, note) -> int:
-    ws = _debts_ws()
+def append_debt(sheet_id, date, person, direction, amount, currency, note) -> int:
+    ws = _debts_ws(sheet_id)
     row = _first_empty_row(ws)
     date = date or datetime.now().strftime("%Y-%m-%d")
     ws.update(range_name=f"A{row}:F{row}",
@@ -220,10 +252,10 @@ def append_debt(date, person, direction, amount, currency, note) -> int:
     return row
 
 
-def _debt_rows():
+def _debt_rows(sheet_id: str):
     """{id, date, person, direction, amount, currency, note} for each filled Debts row."""
     out = []
-    for i, r in enumerate(_debts_ws().get_all_values()[1:], start=2):  # row 1 is the header
+    for i, r in enumerate(_debts_ws(sheet_id).get_all_values()[1:], start=2):  # row 1 is the header
         if len(r) < 4 or not r[0]:
             continue
         try:
@@ -239,8 +271,8 @@ def _debt_rows():
 
 
 # ---- repayments: A:Date B:DebtID C:Amount D:Note ----
-def append_repayment(date, debt_id, amount, note) -> int:
-    ws = _repayments_ws()
+def append_repayment(sheet_id, date, debt_id, amount, note) -> int:
+    ws = _repayments_ws(sheet_id)
     row = _first_empty_row(ws)
     date = date or datetime.now().strftime("%Y-%m-%d")
     ws.update(range_name=f"A{row}:D{row}",
@@ -249,10 +281,10 @@ def append_repayment(date, debt_id, amount, note) -> int:
     return row
 
 
-def _repayment_rows():
+def _repayment_rows(sheet_id: str):
     """{row, date, debt_id, amount, note} for each filled Repayments row."""
     out = []
-    for i, r in enumerate(_repayments_ws().get_all_values()[1:], start=2):
+    for i, r in enumerate(_repayments_ws(sheet_id).get_all_values()[1:], start=2):
         if len(r) < 3 or not r[0]:
             continue
         try:
@@ -265,8 +297,7 @@ def _repayment_rows():
     return out
 
 
-def _repaid_amount(debt_id: int, repayments=None) -> float:
-    repayments = repayments if repayments is not None else _repayment_rows()
+def _repaid_amount(debt_id: int, repayments) -> float:
     return sum(r["amount"] for r in repayments if r["debt_id"] == debt_id)
 
 
@@ -277,10 +308,10 @@ def _with_balance(debt, repayments):
             "status": "closed" if remaining <= 0 else "open"}
 
 
-def _filtered_debts(person: str = None, direction: str = None, open_only: bool = True):
-    repayments = _repayment_rows()
+def _filtered_debts(sheet_id, person: str = None, direction: str = None, open_only: bool = True):
+    repayments = _repayment_rows(sheet_id)
     out = []
-    for d in _debt_rows():
+    for d in _debt_rows(sheet_id):
         if person and d["person"].lower() != person.lower():
             continue
         if direction and d["direction"] != direction:
@@ -291,20 +322,20 @@ def _filtered_debts(person: str = None, direction: str = None, open_only: bool =
     return out
 
 
-def open_debts(person: str = None, direction: str = None):
+def open_debts(sheet_id, person: str = None, direction: str = None):
     """Debts with remaining > 0, balance computed, optionally filtered by person/direction."""
-    return _filtered_debts(person, direction, open_only=True)
+    return _filtered_debts(sheet_id, person, direction, open_only=True)
 
 
-def closed_debts(person: str = None, direction: str = None):
+def closed_debts(sheet_id, person: str = None, direction: str = None):
     """Fully repaid debts (remaining <= 0), optionally filtered by person/direction."""
-    return _filtered_debts(person, direction, open_only=False)
+    return _filtered_debts(sheet_id, person, direction, open_only=False)
 
 
-def recent_debt_persons(limit: int = 6):
+def recent_debt_persons(sheet_id, limit: int = 6):
     """Distinct debt person names, most-recently-added first (for quick-pick buttons)."""
     seen = []
-    for d in reversed(_debt_rows()):
+    for d in reversed(_debt_rows(sheet_id)):
         if d["person"] not in seen:
             seen.append(d["person"])
         if len(seen) >= limit:
@@ -312,10 +343,10 @@ def recent_debt_persons(limit: int = 6):
     return seen
 
 
-def persons_with_open_debt(direction: str, limit: int = 8):
+def persons_with_open_debt(sheet_id, direction: str, limit: int = 8):
     """Distinct person names with an open debt in the given direction, most recent first."""
     seen = []
-    for d in reversed(open_debts(direction=direction)):
+    for d in reversed(open_debts(sheet_id, direction=direction)):
         if d["person"] not in seen:
             seen.append(d["person"])
         if len(seen) >= limit:
@@ -323,26 +354,26 @@ def persons_with_open_debt(direction: str, limit: int = 8):
     return seen
 
 
-def debt_by_id(debt_id: int):
-    repayments = _repayment_rows()
-    for d in _debt_rows():
+def debt_by_id(sheet_id, debt_id: int):
+    repayments = _repayment_rows(sheet_id)
+    for d in _debt_rows(sheet_id):
         if d["id"] == debt_id:
             return _with_balance(d, repayments)
     return None
 
 
-def debt_history(person: str):
+def debt_history(sheet_id, person: str):
     """All debts (open and closed) for a person, each with its repayments, newest first."""
-    repayments = _repayment_rows()
-    debts = [_with_balance(d, repayments) for d in _debt_rows()
+    repayments = _repayment_rows(sheet_id)
+    debts = [_with_balance(d, repayments) for d in _debt_rows(sheet_id)
              if d["person"].lower() == person.lower()]
     for d in debts:
         d["repayments"] = [r for r in repayments if r["debt_id"] == d["id"]]
     return list(reversed(debts))
 
 
-def undo_last_debt():
-    ws = _debts_ws()
+def undo_last_debt(sheet_id):
+    ws = _debts_ws(sheet_id)
     row = _first_empty_row(ws) - 1
     if row <= 1:
         return None
@@ -351,8 +382,8 @@ def undo_last_debt():
     return vals
 
 
-def undo_last_repayment():
-    ws = _repayments_ws()
+def undo_last_repayment(sheet_id):
+    ws = _repayments_ws(sheet_id)
     row = _first_empty_row(ws) - 1
     if row <= 1:
         return None

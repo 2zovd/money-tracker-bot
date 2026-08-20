@@ -100,12 +100,26 @@ See `docs/DATA_MODEL.md` for how debts and repayments are stored and linked.
 ALLOWED_USER_ID=111111111,222222222   # comma-separated Telegram IDs; empty = open to anyone
 ```
 
+## Multi-user (each user their own sheet)
+
+```
+DB_FILE=data/users.db     # SQLite mapping of Telegram user -> their sheet id
+TEMPLATE_SHEET_URL=...     # public template users copy during onboarding
+GOOGLE_SA_EMAIL=...        # optional; otherwise read from service_account.json's client_email
+```
+
+Every user connects their own spreadsheet via the `/start` wizard (or `/connect <link>`);
+the mapping is kept in `DB_FILE`. One shared `ANTHROPIC_API_KEY` and one service account
+serve everyone. Leave `SHEET_ID` empty; set it only to migrate an existing single-sheet
+deployment (its `ALLOWED_USER_ID` users are seeded to that sheet on first run). See
+`docs/SETUP.md` → **Multi-user mode** for the full flow.
+
 ## Language
 
 The interface is English. Claude parses whatever language you type, and it writes the
 category names exactly as they appear in `CATEGORY_TABLE` — so if you name your categories
 in another language, that's what lands in the sheet. To change the bot's replies, edit the
-strings in `bot/dialog.py`.
+strings in `bot/strings.py` — all user-facing text lives there.
 
 ## Model
 

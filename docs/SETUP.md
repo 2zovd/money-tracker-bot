@@ -2,14 +2,18 @@
 
 Requires Python 3.10+.
 
-## Five things you need
+## Things you need
 
 1. **TELEGRAM_TOKEN** — @BotFather → `/newbot`.
-2. **ALLOWED_USER_ID** — @userinfobot (so only you can message the bot). Optional; leave
-   empty to let anyone use it. Comma-separated for several people.
-3. **ANTHROPIC_API_KEY** — console.anthropic.com → API Keys (add a few $ of credit).
-4. **SHEET_ID** — from the Google Sheet URL (between `/d/` and `/edit`).
-5. **service_account.json** — the bot's access to the sheet (below).
+2. **ALLOWED_USER_ID** — @userinfobot. Comma-separated allowlist; empty = anyone may
+   connect their own sheet.
+3. **ANTHROPIC_API_KEY** — console.anthropic.com → API Keys (add a few $ of credit). One
+   shared key covers everyone using this bot.
+4. **service_account.json** — the bot's access to sheets (below).
+
+`SHEET_ID` is no longer required: each user connects their own sheet at runtime (see
+**Multi-user mode**). Set it only to migrate an existing single-sheet deployment — on
+startup the `ALLOWED_USER_ID` users are seeded to that sheet so they skip onboarding.
 
 ## Your categories
 
@@ -40,6 +44,27 @@ The `.xlsx` is not shipped in the repo — you generate it from your categories:
 4. Open it → **Keys → Add key → JSON** → downloads a file → rename it to `service_account.json`.
 5. In the file find `client_email` (…@…iam.gserviceaccount.com) and copy it.
 6. In the sheet → **Share** → paste that email → **Editor**. Without this the bot can't write.
+
+## Multi-user mode (let others test with their own sheet)
+
+The bot serves several people from one process, each writing to their **own** Google Sheet.
+One shared Anthropic key and one service account are used for everyone; only the sheet is
+per-user, stored in a small SQLite file (`DB_FILE`, default `data/users.db`).
+
+Owner setup, once:
+
+1. Build the template sheet (`tracker/build_tracker.py`), upload it as a Google Sheet, then
+   **Share → General access → Anyone with the link → Viewer**. Put its URL in
+   `TEMPLATE_SHEET_URL`.
+2. Leave `SHEET_ID` empty. Optionally set `ALLOWED_USER_ID` to invite specific testers only.
+
+What a tester does — the bot walks them through it on `/start`:
+
+1. Open the template → **File → Make a copy** (their own private sheet).
+2. **Share** their copy as **Editor** with the service-account email (the bot shows it).
+3. Paste the link to their copy. The bot verifies access, checks it's a real copy of the
+   template (has the `Journal` tab), and connects it. Errors bounce back to the exact step
+   to fix. `/disconnect` unlinks; `/connect <link>` is a shortcut past the wizard.
 
 ## Deploy (VPS + systemd)
 

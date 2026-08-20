@@ -18,6 +18,9 @@ venv/
 *.egg-info/
 .pytest_cache/
 
+# --- Per-user store (SQLite) ---
+data/
+
 # --- Generated artifacts ---
 tracker/*.xlsx
 .~lock.*#
