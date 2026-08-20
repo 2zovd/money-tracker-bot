@@ -97,8 +97,32 @@ See `docs/DATA_MODEL.md` for how debts and repayments are stored and linked.
 ## Who can use the bot (`.env`)
 
 ```
-ALLOWED_USER_ID=111111111,222222222   # comma-separated Telegram IDs; empty = open to anyone
+ADMIN_USER_ID=111111111               # comma-separated Telegram IDs; the bot's owners
+ALLOWED_USER_ID=222222222,333333333   # comma-separated; pre-approved, skip the request
 ```
+
+**The bot is closed by default.** It spends your Anthropic key and writes to Google
+Sheets, so an unknown user cannot just start using it:
+
+- **Admins** (`ADMIN_USER_ID`) always pass, and they receive every access request.
+- **Approved** users pass. `ALLOWED_USER_ID` is a pre-approved seed list, applied once
+  on startup — use it to keep an existing deployment working.
+- Anyone else: their first message files a request and pings the admins with
+  **Approve** / **Block** buttons. Until a decision is made the bot does nothing for
+  them. A blocked user gets no reply at all.
+
+Admin commands:
+
+```
+/users                  # list everyone with their status (pending first)
+/users approve <id>     # grant access (the user is notified)
+/users block <id>       # revoke access
+```
+
+Decisions live in the `access` table of `DB_FILE`, separate from the sheet mapping —
+blocking someone does not lose which sheet they had connected. If `ADMIN_USER_ID` is
+empty the bot logs a warning on startup and refuses everyone: with no admin there is
+nobody who could approve a request.
 
 ## Multi-user (each user their own sheet)
 

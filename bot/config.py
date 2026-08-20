@@ -42,8 +42,16 @@ CURRENCY_CODE = os.environ.get("CURRENCY_CODE", "EUR")
 USD_RATE = float(os.environ.get("USD_RATE", "0.92"))  # 1 USD -> base
 GBP_RATE = float(os.environ.get("GBP_RATE", "1.16"))  # 1 GBP -> base
 
-# Comma-separated Telegram user IDs allowed to use the bot. Empty = open to anyone.
-ALLOWED_USER_IDS = [s.strip() for s in os.environ.get("ALLOWED_USER_ID", "").split(",") if s.strip()]
+def _ids(name):
+    return [s.strip() for s in os.environ.get(name, "").split(",") if s.strip()]
+
+
+# Admins: always allowed, and they receive access requests from new users.
+ADMIN_USER_IDS = _ids("ADMIN_USER_ID")
+# Pre-approved Telegram user IDs, seeded into the access table on startup. Everyone
+# else must be approved by an admin — the bot is closed by default because it spends
+# the owner's Anthropic key.
+ALLOWED_USER_IDS = _ids("ALLOWED_USER_ID")
 
 # SHEET_ID is no longer required: each user connects their own sheet at runtime.
 _REQUIRED = ("TELEGRAM_TOKEN", "ANTHROPIC_API_KEY")

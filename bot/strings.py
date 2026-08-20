@@ -179,6 +179,38 @@ BTN_ONB_COPIED = "I copied it"
 BTN_ONB_GRANTED = "I granted access"
 BTN_ONB_CANCEL = "✖ Cancel"
 
+# ---- access control (admin approves each new user) ----
+ACCESS_REQUESTED = (
+    "Thanks! Your access request has been sent to the bot owner.\n"
+    "I'll message you here as soon as it's approved."
+)
+ACCESS_PENDING = "Your request is still waiting for approval — I'll ping you once it's decided."
+ACCESS_CLOSED = (
+    "This bot is private and isn't accepting new users right now."
+)
+ACCESS_GRANTED = "You're approved! Send /start to connect your sheet and begin."
+ACCESS_REQUEST_ADMIN = (
+    "New access request:\n"
+    "{name}{username}\n"
+    "id: {user_id}"
+)
+ACCESS_DECIDED_ADMIN = "{who} → {status}."
+ACCESS_LIST_HEADER = "Users:"
+ACCESS_NO_USERS = "No users yet."
+ACCESS_USERS_USAGE = (
+    "/users — list everyone\n"
+    "/users approve <id> — grant access\n"
+    "/users block <id> — revoke access"
+)
+ACCESS_ADMIN_ONLY = "That command is for the bot owner."
+ACCESS_NO_ADMIN_WARNING = (
+    "ADMIN_USER_ID is not set — nobody can approve new users. "
+    "Set it in .env and restart, otherwise the bot is closed to everyone but you."
+)
+
+BTN_ACCESS_APPROVE = "✓ Approve"
+BTN_ACCESS_BLOCK = "✖ Block"
+
 # ---- bot command menu (shown in Telegram's "/" command list) ----
 # Kept short on purpose: the command itself already says what it does,
 # this is just the one-line hint next to it.

@@ -5,8 +5,9 @@ Requires Python 3.10+.
 ## Things you need
 
 1. **TELEGRAM_TOKEN** — @BotFather → `/newbot`.
-2. **ALLOWED_USER_ID** — @userinfobot. Comma-separated allowlist; empty = anyone may
-   connect their own sheet.
+2. **ADMIN_USER_ID** — your own Telegram id from @userinfobot. You approve everyone
+   else. The bot is closed by default: a new user's first message becomes a request you
+   approve or block from a button. See **Access** in `docs/CONFIGURATION.md`.
 3. **ANTHROPIC_API_KEY** — console.anthropic.com → API Keys (add a few $ of credit). One
    shared key covers everyone using this bot.
 4. **service_account.json** — the bot's access to sheets (below).

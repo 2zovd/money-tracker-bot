@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from . import sheets, parser, config, debts, onboarding, store, strings as s
+from . import access, sheets, parser, config, debts, onboarding, store, strings as s
 from .categories import CATEGORIES, FUEL, GROCERIES, FALLBACK
 
 log = logging.getLogger("expense-bot")
@@ -273,7 +273,7 @@ async def _start_debt_wizard(update, ctx, sid, action=None):
 
 async def on_debt_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         await query.answer()
         return
     await query.answer()
@@ -333,7 +333,7 @@ async def _answer_debt_wizard(update, ctx, sid, text):
 
 
 async def cmd_debt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -354,7 +354,7 @@ async def cmd_debt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -374,8 +374,99 @@ async def cmd_debts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ---- handlers ----
-def _authorized(update):
-    return not config.ALLOWED_USER_IDS or str(update.effective_user.id) in config.ALLOWED_USER_IDS
+def _is_admin(user_id) -> bool:
+    return str(user_id) in config.ADMIN_USER_IDS
+
+
+async def _say(update, ctx, text):
+    """Reply in the current chat whether we got here from a message or a button."""
+    await ctx.bot.send_message(chat_id=update.effective_chat.id, text=text)
+
+
+def _who(user) -> str:
+    """How an admin sees a requester: display name plus @username when there is one."""
+    name = user.full_name or str(user.id)
+    return f"{name} (@{user.username})" if user.username else name
+
+
+async def _notify_admins(ctx, user):
+    text = s.ACCESS_REQUEST_ADMIN.format(
+        name=user.full_name or "",
+        username=f" (@{user.username})" if user.username else "",
+        user_id=user.id)
+    kb = access.decision_keyboard(user.id)
+    for admin_id in config.ADMIN_USER_IDS:
+        try:
+            await ctx.bot.send_message(chat_id=int(admin_id), text=text, reply_markup=kb)
+        except Exception:  # a wrong id or a blocked bot must not break the request
+            log.warning("could not notify admin %s", admin_id)
+
+
+async def _allowed(update, ctx) -> bool:
+    """Access gate. The bot is closed by default: admins and approved users pass,
+    an unknown user's first message files a request and pings the admins."""
+    user = update.effective_user
+    if _is_admin(user.id):
+        return True
+    status = store.access_status(user.id)
+    if status == access.APPROVED:
+        return True
+    if status == access.BLOCKED:
+        return False  # stay silent, don't tell a blocked user anything
+    if status == access.PENDING:
+        await _say(update, ctx, s.ACCESS_PENDING)
+        return False
+    if not config.ADMIN_USER_IDS:
+        log.warning("access request from %s but ADMIN_USER_ID is not set", user.id)
+        await _say(update, ctx, s.ACCESS_CLOSED)
+        return False
+    store.request_access(user.id, _who(user))
+    await _notify_admins(ctx, user)
+    await _say(update, ctx, s.ACCESS_REQUESTED)
+    return False
+
+
+async def _apply_decision(ctx, status, user_id, username=""):
+    """Record an admin's decision and let an approved user know they can start."""
+    store.set_access(user_id, status, username)
+    if status == access.APPROVED:
+        try:
+            await ctx.bot.send_message(chat_id=user_id, text=s.ACCESS_GRANTED)
+        except Exception:  # the user may not have started a chat with us yet
+            log.warning("could not notify approved user %s", user_id)
+
+
+async def on_access_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not _is_admin(update.effective_user.id):
+        return
+    parsed = access.parse_callback(query.data)
+    if parsed is None:
+        return
+    status, user_id = parsed
+    await _apply_decision(ctx, status, user_id)
+    await query.edit_message_text(
+        query.message.text + "\n\n" + s.ACCESS_DECIDED_ADMIN.format(who=user_id, status=status))
+
+
+async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: list users, or approve/block one by id."""
+    if not _is_admin(update.effective_user.id):
+        await update.message.reply_text(s.ACCESS_ADMIN_ONLY)
+        return
+    if not ctx.args:
+        rows = store.list_access()
+        await update.message.reply_text(access.format_user_list(rows))
+        return
+    parsed = access.parse_users_args(ctx.args)
+    if parsed is None:
+        await update.message.reply_text(s.ACCESS_USERS_USAGE)
+        return
+    status, user_id = parsed
+    await _apply_decision(ctx, status, user_id)
+    await update.message.reply_text(
+        s.ACCESS_DECIDED_ADMIN.format(who=user_id, status=status))
 
 
 async def _require_sheet(update):
@@ -408,7 +499,7 @@ async def _start_onboarding(update, ctx):
 
 async def on_onboarding_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         await query.answer()
         return
     await query.answer()
@@ -474,7 +565,7 @@ async def _finish_connect(update, ctx, sid):
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     if store.is_connected(update.effective_user.id):
         await update.message.reply_text(s.HELP_TEXT)
@@ -483,14 +574,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     await update.message.reply_text(s.HELP_TEXT)
 
 
 async def cmd_connect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Fast path for experienced users: /connect <link>. Onboarding via /start is the norm."""
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     if not ctx.args:
         await update.message.reply_text(s.CONNECT_USAGE)
@@ -504,7 +595,7 @@ async def cmd_connect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_disconnect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     store.disconnect(update.effective_user.id)
     await update.message.reply_text(s.DISCONNECTED)
@@ -527,7 +618,7 @@ async def _send_summary(update, title, total, by_cat):
 
 
 async def cmd_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -537,7 +628,7 @@ async def cmd_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -556,7 +647,7 @@ async def cmd_day(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -567,7 +658,7 @@ async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -593,7 +684,7 @@ async def cmd_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_months(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -613,7 +704,7 @@ async def cmd_months(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_income(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -636,7 +727,7 @@ _UNDO_FUNCS = {
 
 
 async def cmd_undo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     sid = await _require_sheet(update)
     if sid is None:
@@ -680,7 +771,7 @@ async def _handle_input(update, ctx, sid, text):
 
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     try:
         if "onboarding" in ctx.user_data:
@@ -696,7 +787,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     try:
         sid = await _require_sheet(update)
@@ -711,7 +802,7 @@ async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    if not await _allowed(update, ctx):
         return
     try:
         sid = await _require_sheet(update)

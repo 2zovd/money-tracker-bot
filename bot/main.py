@@ -4,7 +4,7 @@ import logging
 from telegram import BotCommand, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from . import config, dialog, store, strings
+from . import access, config, dialog, store, strings
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
 
@@ -15,11 +15,15 @@ async def _post_init(app):
 
 
 def _seed_existing_users():
-    """Keep a pre-existing single-sheet deployment working: map the allowlisted users to
-    the configured SHEET_ID once, so they don't have to re-run onboarding."""
-    if config.SHEET_ID and config.ALLOWED_USER_IDS:
-        for uid in config.ALLOWED_USER_IDS:
+    """Keep a pre-existing deployment working: the admins and the ALLOWED_USER_ID list
+    are pre-approved, and if a single SHEET_ID is configured they are mapped to it once
+    so they don't have to re-run onboarding."""
+    for uid in config.ADMIN_USER_IDS + config.ALLOWED_USER_IDS:
+        store.approve_seed(int(uid))
+        if config.SHEET_ID:
             store.seed(int(uid), config.SHEET_ID)
+    if not config.ADMIN_USER_IDS:
+        logging.getLogger("expense-bot").warning(strings.ACCESS_NO_ADMIN_WARNING)
 
 
 def main():
@@ -31,6 +35,8 @@ def main():
     app.add_handler(CommandHandler("help", dialog.cmd_help))
     app.add_handler(CommandHandler("connect", dialog.cmd_connect))
     app.add_handler(CommandHandler("disconnect", dialog.cmd_disconnect))
+    app.add_handler(CommandHandler("users", dialog.cmd_users))
+    app.add_handler(CallbackQueryHandler(dialog.on_access_callback, pattern=f"^{access.CB_PREFIX}:"))
     app.add_handler(CallbackQueryHandler(dialog.on_onboarding_callback, pattern="^onb:"))
     app.add_handler(CommandHandler("day", dialog.cmd_day))
     app.add_handler(CommandHandler("week", dialog.cmd_week))
