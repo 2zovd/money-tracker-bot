@@ -14,6 +14,13 @@ daily tracking and the first 2–3 months of data collection.
 - More parsing tests (dining/groceries/fuel cases, currencies).
 - Tags for recurring expenses (rent, subscriptions) — auto-reminders.
 
+## Phase 1.5 — Agent mode (planned)
+
+Tool use instead of a fixed parser: the bot answers questions about the data
+("how much on groceries in September") and takes free-form instructions, with read-only
+as a real boundary rather than an instruction. Plan, cost and risks:
+[AGENT_MODE.md](AGENT_MODE.md).
+
 ## Phase 2 — Own DB + API (when Sheets gets tight)
 
 Google Sheets won't power a mini app well (concurrency, speed, relations). Move to:
